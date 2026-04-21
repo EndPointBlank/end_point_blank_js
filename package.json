@@ -1,0 +1,31 @@
+{
+  "name": "end-point-blank-js",
+  "version": "0.1.0",
+  "description": "JavaScript library for EndPointBlank API integration - endpoint tracking, authorization, and error reporting",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "test": "jest --coverage"
+  },
+  "keywords": ["endpointblank", "api", "middleware", "authorization"],
+  "author": "Robert A. Lasch <rlasch@gmail.com>",
+  "license": "MIT",
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "express": "^4.18.2"
+  },
+  "peerDependencies": {
+    "express": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "express": {
+      "optional": true
+    }
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": ["**/tests/**/*.test.js"]
+  }
+}
