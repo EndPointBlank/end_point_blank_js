@@ -2,8 +2,14 @@
 
 const { instance: config } = require('../configuration');
 
+const MAX_SIZE = 1000;
+
 /**
- * Singleton cache for storing authentication credentials with TTL-based expiry.
+ * Singleton cache for storing authentication credentials with TTL-based expiry
+ * and a maximum entry cap.
+ *
+ * When full, expired entries are evicted first; if still at capacity the
+ * oldest insertion is removed (Map preserves insertion order).
  *
  * JavaScript is single-threaded so no explicit locking is needed.
  *
@@ -24,6 +30,18 @@ class AuthenticationCache {
   store(key, credentials) {
     if (credentials == null) return;
     const ttlMs = (config.cacheTtl ?? 300) * 1000;
+    const now = new Date();
+
+    // Evict expired entries
+    for (const [k, v] of this._cache) {
+      if (v.expiredAt <= now) this._cache.delete(k);
+    }
+
+    // Evict oldest insertions if at capacity (Map.keys() preserves order)
+    while (this._cache.size >= MAX_SIZE) {
+      this._cache.delete(this._cache.keys().next().value);
+    }
+
     this._cache.set(key, {
       credentials,
       expiredAt: new Date(Date.now() + ttlMs),
