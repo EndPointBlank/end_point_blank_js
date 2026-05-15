@@ -1,6 +1,7 @@
 'use strict';
 
 const REFRESH_BUFFER_MS = 2 * 60 * 1000; // 2 minutes
+const MIN_TTL_MS = 30 * 1000; // 30 seconds
 
 /**
  * Singleton cache for access tokens keyed by hostname.
@@ -73,7 +74,7 @@ class AccessTokens {
    */
   exists(hostname) {
     const entry = this._tokens.get(hostname.toLowerCase());
-    return Boolean(entry && entry.expiredAt > new Date());
+    return Boolean(entry && entry.expiredAt > new Date(Date.now() + MIN_TTL_MS));
   }
 
   /**
