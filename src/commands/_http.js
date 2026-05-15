@@ -1,7 +1,7 @@
 'use strict';
 
 const TIMEOUT_MS = 15_000;
-const RETRY_DELAY_MS = 500;
+const RETRY_DELAY_MS = 200;
 const MAX_ATTEMPTS = 3;
 
 /**
