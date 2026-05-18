@@ -34,12 +34,13 @@ async function authorized(req, res, next) {
     const response = await EndpointAuthorize.authorize(req, path, version);
 
     if (!response || response.status !== 201) {
+      const statusCode = response ? response.status : 503;
       let message = 'Authorization service unavailable';
       if (response) {
         const body = await response.json().catch(() => ({}));
         message = body.error || (await response.text().catch(() => message));
       }
-      return next(new UnauthorizedError(`Authorization failed: ${message}`));
+      return next(new UnauthorizedError(`Authorization failed: ${message}`, statusCode));
     }
 
     next();

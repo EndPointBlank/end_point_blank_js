@@ -9,9 +9,10 @@
  * Equivalent to the Ruby gem's `EndPointBlank::UnauthorizedError`.
  */
 class UnauthorizedError extends Error {
-  constructor(message) {
+  constructor(message, statusCode = 401) {
     super(message);
     this.name = 'UnauthorizedError';
+    this.statusCode = statusCode;
   }
 }
 
