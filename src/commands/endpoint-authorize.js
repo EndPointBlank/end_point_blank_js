@@ -31,7 +31,8 @@ const EndpointAuthorize = {
     }
 
     const host = (req.headers?.host || req.hostname || '').replace(/:\d+$/, '');
-    const authHeader = await Authorization.header();
+    const { AccessTokens } = require('../tokens/access-tokens');
+    const authHeader = await Authorization.header(host);
 
     const body = {
       path,
@@ -43,7 +44,14 @@ const EndpointAuthorize = {
       source_ip: remoteAddr(req),
     };
 
-    const response = await post(config.authorizeUrl, authHeader, body);
+    let response = await post(config.authorizeUrl, authHeader, body);
+
+    if (response && response.status === 401 && authHeader.startsWith('Bearer ')) {
+      AccessTokens.remove(host);
+      const retryAuth = await Authorization.header(host);
+      response = await post(config.authorizeUrl, retryAuth, body);
+    }
+
     if (!response) return null;
 
     console.info(`[EndPointBlank] Authorization response: ${response.status}`);
