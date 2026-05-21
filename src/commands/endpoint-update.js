@@ -40,6 +40,12 @@ class EndpointUpdate {
   }
 
   async _write(data) {
+    console.info(
+      `[EndPointBlank] Sending application update: ` +
+        `application=${data.application} environment=${data.environment} ` +
+        `app_version=${data.app_version}`
+    );
+
     const authHeader = await Authorization.header();
     const response = await post(config.endpointUpdateUrl, authHeader, data);
     if (!response) return;
