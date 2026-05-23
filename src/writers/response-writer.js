@@ -51,7 +51,6 @@ function _writer() {
 
 function _truncate(body) {
   if (body == null) return null;
-  if (body.length > 1030) return body;
   return body.length > 1024 ? body.slice(0, 1024) + '...' : body;
 }
 
