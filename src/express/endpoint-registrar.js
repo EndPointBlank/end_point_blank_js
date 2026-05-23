@@ -51,6 +51,10 @@ function collectEndpoints(router, prefix = '') {
         .map((l) => getVersions(l.handle))
         .reduce((acc, v) => Object.assign(acc, v), {});
 
+      // Skip routes with no declared version metadata. An empty array
+      // under a declared state still counts as "declared".
+      if (Object.keys(versions).length === 0) continue;
+
       for (const method of methods) {
         endpoints.push({ path, http_method: method.toUpperCase(), endpoint_versions: versions });
       }
