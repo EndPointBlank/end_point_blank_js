@@ -36,6 +36,9 @@ const LogWriter = {
   async write(message, level, data = {}) {
     try {
       const req = RequestStore.get();
+      const stamped = req
+        ? { stamped_path: req.path || req.originalUrl, stamped_http_method: req.method }
+        : {};
       const payload = {
         message,
         log_level: level,
@@ -44,6 +47,7 @@ const LogWriter = {
         uuid: req ? (req.headers && req.headers['x-request-id']) || req.id || null : null,
         data,
         source_application_environment_id: RequestStore.getSourceApplicationEnvironmentId(),
+        ...stamped,
       };
       await _writer().write([payload]);
     } catch (err) {

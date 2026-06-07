@@ -5,6 +5,7 @@ const { RequestStore } = require('../request-store');
 const { VersionFinder } = require('../commands/version-finder');
 const { DirectWriter } = require('./direct-writer');
 const { DelayedWriter } = require('./delayed-writer');
+const { applyMasking } = require('../masking');
 
 /**
  * Sends request payloads to the EndPointBlank API.
@@ -21,7 +22,7 @@ const RequestWriter = {
       if (!req) return;
       const version = VersionFinder.find(req);
       const headers = req.headers ? { ...req.headers } : {};
-      const payload = {
+      const rawPayload = {
         app_name: config.appName,
         env: config.environment,
         uuid: RequestStore.getUuid() || headers['x-request-id'] || req.id || null,
@@ -33,6 +34,7 @@ const RequestWriter = {
         request: _readBody(req),
         sent_at: new Date().toISOString(),
       };
+      const payload = applyMasking(rawPayload, 'request', config.maskingRules, config.maskHook);
       await _writer().write([payload]);
     } catch (err) {
       console.error('[EndPointBlank] RequestWriter failed:', err.message);

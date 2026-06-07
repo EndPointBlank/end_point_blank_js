@@ -42,6 +42,8 @@ class Configuration {
     this.applicationVersion = null;
     this.tokenTtl = null;       // seconds
     this.cacheTtl = 300;        // seconds
+    this.maskingRules = [];
+    this.maskHook = null;
   }
 
   get logUrl() {

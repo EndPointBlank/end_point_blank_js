@@ -5,6 +5,7 @@ const { RequestStore } = require('../request-store');
 const { DirectWriter } = require('./direct-writer');
 const { DelayedWriter } = require('./delayed-writer');
 const { LogMode } = require('../configuration');
+const { applyMasking } = require('../masking');
 
 /**
  * Sends unhandled application exception payloads to the EndPointBlank API.
@@ -19,14 +20,19 @@ const ExceptionWriter = {
   async write(err) {
     try {
       const req = RequestStore.get();
-      const payload = {
+      const stamped = req
+        ? { stamped_path: req.path || req.originalUrl, stamped_http_method: req.method }
+        : {};
+      const rawPayload = {
         app_name: config.appName,
         message: err.message,
         stacktrace: err.stack ? err.stack.split('\n').slice(1).map(l => l.trim()).filter(Boolean) : null,
         sent_at: new Date().toISOString(),
         source_application_environment_id: RequestStore.getSourceApplicationEnvironmentId(),
         uuid: RequestStore.getUuid() || (req && req.headers && req.headers['x-request-id']) || (req && req.id) || null,
+        ...stamped,
       };
+      const payload = applyMasking(rawPayload, 'error', config.maskingRules, config.maskHook);
       await _writer().write([payload]);
     } catch (reportingErr) {
       console.error('[EndPointBlank] ExceptionWriter failed:', reportingErr.message);
