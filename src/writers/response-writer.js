@@ -5,6 +5,7 @@ const { RequestStore } = require('../request-store');
 const { RoutePatternFinder } = require('../commands/route-pattern-finder');
 const { DirectWriter } = require('./direct-writer');
 const { DelayedWriter } = require('./delayed-writer');
+const { applyMasking } = require('../masking');
 
 /**
  * Sends response payloads to the EndPointBlank API.
@@ -24,18 +25,19 @@ const ResponseWriter = {
       const req = RequestStore.get();
       const route = req ? RoutePatternFinder.find(req) : null;
       const reqHeaders = req && req.headers ? req.headers : {};
-      const payload = {
+      const rawPayload = {
         app_name: config.appName,
         env: config.environment,
         uuid: RequestStore.getUuid() || reqHeaders['x-request-id'] || (req && req.id) || null,
         status,
         headers,
-        body: _truncate(body),
+        response_body: _truncate(body),
         sent_at: new Date().toISOString(),
         route,
         data,
         source_application_environment_id: RequestStore.getSourceApplicationEnvironmentId(),
       };
+      const payload = applyMasking(rawPayload, 'response', config.maskingRules, config.maskHook);
       await _writer().write([payload]);
     } catch (err) {
       console.error('[EndPointBlank] ResponseWriter failed:', err.message);
