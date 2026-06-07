@@ -26,29 +26,31 @@ test('collectEndpoints returns routes from an Express app', () => {
 test('collectEndpoints includes HTTP method', () => {
   const app = makeApp();
   const endpoints = collectEndpoints(app._router);
-  const getUsers = endpoints.find((e) => e.path === '/api/v1/users' && e.action === 'GET');
+  const getUsers = endpoints.find((e) => e.path === '/api/v1/users' && e.http_method === 'GET');
   expect(getUsers).toBeDefined();
-  expect(getUsers.action).toBe('GET');
+  expect(getUsers.http_method).toBe('GET');
 });
 
 test('versioned metadata is included', () => {
   const app = makeApp();
   const endpoints = collectEndpoints(app._router);
-  const route = endpoints.find((e) => e.path === '/api/v1/users' && e.action === 'GET');
-  expect(route.versions).toEqual({ Current: ['v1', 'v2'] });
+  const route = endpoints.find((e) => e.path === '/api/v1/users' && e.http_method === 'GET');
+  expect(route.endpoint_versions).toEqual({ Current: ['v1', 'v2'] });
 });
 
-test('routes without versioned metadata have empty versions', () => {
+test('routes without declared version metadata are skipped', () => {
   const app = makeApp();
   const endpoints = collectEndpoints(app._router);
-  const route = endpoints.find((e) => e.path === '/api/v1/users' && e.action === 'POST');
-  expect(route.versions).toEqual({});
+  // POST /api/v1/users and DELETE /api/v1/users/:id have no versioned() wrapper,
+  // so they are intentionally excluded from the published endpoint list.
+  const post = endpoints.find((e) => e.path === '/api/v1/users' && e.http_method === 'POST');
+  expect(post).toBeUndefined();
 });
 
 test('collects routes from mounted sub-routers', () => {
   const app = express();
   const router = express.Router();
-  router.get('/items', (req, res) => res.json([]));
+  router.get('/items', versioned(['v1'], { state: 'Current' }), (req, res) => res.json([]));
   app.use('/api', router);
 
   const endpoints = collectEndpoints(app._router);

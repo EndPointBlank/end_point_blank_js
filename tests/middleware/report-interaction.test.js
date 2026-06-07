@@ -16,7 +16,13 @@ function makeReq(overrides = {}) {
 }
 
 function makeRes() {
-  return { status: 200 };
+  // Minimal Express-like response: reportInteraction registers a
+  // `res.on('finish', ...)` handler and reads statusCode/getHeaders there.
+  return {
+    statusCode: 200,
+    on: () => {},
+    getHeaders: () => ({}),
+  };
 }
 
 test('stores request in RequestStore during middleware execution', async () => {

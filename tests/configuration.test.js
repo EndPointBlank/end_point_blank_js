@@ -30,8 +30,9 @@ test('configure sets logMode', () => {
   expect(config.logMode).toBe(LogMode.DELAYED);
 });
 
-test('default baseUrl', () => {
-  expect(config.baseUrl).toBe('https://endpointblank.com/api');
+test('default base urls', () => {
+  expect(config.baseUrl).toBe('https://in.endpointblank.com');
+  expect(config.logBaseUrl).toBe('https://log.endpointblank.com');
 });
 
 test('default workerCount', () => {
@@ -46,12 +47,18 @@ test('default cacheTtl is 300', () => {
   expect(config.cacheTtl).toBe(300);
 });
 
-test('url getters build from baseUrl', () => {
-  config.baseUrl = 'https://example.com/api';
-  expect(config.logUrl).toBe('https://example.com/api/api/logs');
-  expect(config.accessTokenUrl).toBe('https://example.com/api/api/access_token');
-  expect(config.authorizeUrl).toBe('https://example.com/api/api/authorize');
-  expect(config.endpointUpdateUrl).toBe('https://example.com/api/api/application_updates');
-  expect(config.applicationErrorsUrl).toBe('https://example.com/api/api/application_errors');
-  expect(config.endpointErrorUrl).toBe('https://example.com/api/api/endpoint_errors');
+test('control-plane url getters build from baseUrl', () => {
+  config.baseUrl = 'https://example.com';
+  expect(config.accessTokenUrl).toBe('https://example.com/api/access_token');
+  expect(config.authorizeUrl).toBe('https://example.com/api/authorize');
+  expect(config.endpointUpdateUrl).toBe('https://example.com/api/application_updates');
+  expect(config.endpointErrorUrl).toBe('https://example.com/api/endpoint_errors');
+});
+
+test('log/ingest url getters build from logBaseUrl', () => {
+  config.logBaseUrl = 'https://logs.example.com';
+  expect(config.logUrl).toBe('https://logs.example.com/api/application_logs');
+  expect(config.applicationErrorsUrl).toBe('https://logs.example.com/api/application_errors');
+  expect(config.requestsUrl).toBe('https://logs.example.com/api/application_requests');
+  expect(config.responsesUrl).toBe('https://logs.example.com/api/application_responses');
 });
