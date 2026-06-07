@@ -1,8 +1,11 @@
 'use strict';
 
+// FIELD_MAP maps a masking target to the OUTGOING WIRE payload key (what the
+// writers send and intake ingests). These MUST match intake's ingest keys:
+// requests carry "headers"/"request"/"path", responses carry "body", errors "message".
 const FIELD_MAP = {
-  request: { request_body: 'request', request_headers: 'request_headers', path: 'path' },
-  response: { response_body: 'response_body' },
+  request: { request_body: 'request', request_headers: 'headers', path: 'path' },
+  response: { response_body: 'body' },
   error: { error_message: 'message' },
   log: {},
 };

@@ -21,13 +21,13 @@ const RequestWriter = {
     try {
       if (!req) return;
       const version = VersionFinder.find(req);
-      const request_headers = req.headers ? { ...req.headers } : {};
+      const headers = req.headers ? { ...req.headers } : {};
       const rawPayload = {
         app_name: config.appName,
         env: config.environment,
-        uuid: RequestStore.getUuid() || request_headers['x-request-id'] || req.id || null,
+        uuid: RequestStore.getUuid() || headers['x-request-id'] || req.id || null,
         host: req.hostname || req.host || null,
-        request_headers,
+        headers,
         path: req.path || req.url || null,
         http_method: req.method || null,
         endpoint_version: version,

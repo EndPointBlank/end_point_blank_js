@@ -31,7 +31,7 @@ const ResponseWriter = {
         uuid: RequestStore.getUuid() || reqHeaders['x-request-id'] || (req && req.id) || null,
         status,
         headers,
-        response_body: _truncate(body),
+        body: _truncate(body),
         sent_at: new Date().toISOString(),
         route,
         data,

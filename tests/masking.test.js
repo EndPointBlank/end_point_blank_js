@@ -6,10 +6,16 @@ const keyRule = (v, targets, mask = '...') => ({ match_type: 'key', match_value:
 const regexRule = (s, targets, mask = '...') => ({ match_type: 'regex', match_value: s, targets, mask_value: mask });
 
 describe('applyMasking', () => {
-  test('masks a matching header value case-insensitively', () => {
-    const payload = { request_headers: { Authorization: 'Bearer x', 'X-Trace': 'ok' } };
+  test('masks a matching header value case-insensitively (wire key "headers")', () => {
+    const payload = { headers: { Authorization: 'Bearer x', 'X-Trace': 'ok' } };
     const out = applyMasking(payload, 'request', [keyRule('authorization', ['request_headers'])], null);
-    expect(out.request_headers).toEqual({ Authorization: '...', 'X-Trace': 'ok' });
+    expect(out.headers).toEqual({ Authorization: '...', 'X-Trace': 'ok' });
+  });
+
+  test('masks a JSON response body (wire key "body")', () => {
+    const payload = { body: '{"email":"a@b.com"}' };
+    const out = applyMasking(payload, 'response', [keyRule('email', ['response_body'])], null);
+    expect(JSON.parse(out.body)).toEqual({ email: '...' });
   });
 
   test('masks matching keys in a JSON request body at any depth', () => {
