@@ -156,6 +156,74 @@ function descend(value, key, rest, fn) {
 }
 
 // ---------------------------------------------------------------------------
+// Replacement backreferences (shared contract) — see spec
+// "Replacement Backreferences". Implemented explicitly (NOT via native
+// String.replace `$N`, which leaves out-of-range refs literal); here an
+// out-of-range or non-participating group expands to "".
+//
+//   groups[0] = whole match, groups[n] = nth capture (undefined/missing → "").
+//   $$           → literal "$"
+//   $<digits>    → groups[N] ?? "" (the FULL consecutive digit run is one N)
+//   $ + other    → literal "$" (also a trailing "$")
+// ---------------------------------------------------------------------------
+
+function expand(template, groups) {
+  let out = '';
+  let i = 0;
+  const len = template.length;
+  while (i < len) {
+    const ch = template[i];
+    if (ch !== '$') {
+      out += ch;
+      i += 1;
+      continue;
+    }
+    const next = template[i + 1];
+    if (next === '$') {
+      out += '$';
+      i += 2;
+      continue;
+    }
+    if (next >= '0' && next <= '9') {
+      let j = i + 1;
+      while (j < len && template[j] >= '0' && template[j] <= '9') j += 1;
+      const n = parseInt(template.slice(i + 1, j), 10);
+      const g = n < groups.length ? groups[n] : undefined;
+      out += g == null ? '' : g;
+      i = j;
+      continue;
+    }
+    // Lone "$" (followed by a non-digit/non-$, or end of string): literal.
+    out += '$';
+    i += 1;
+  }
+  return out;
+}
+
+// Global regex replacement using the explicit expander. Clones `regex` with the
+// global flag, walks every match via matchAll, expands the template per match,
+// and copies the gaps verbatim. Guards zero-width matches against infinite loop.
+function regexReplaceAll(regex, str, template) {
+  const flags = regex.flags.includes('g') ? regex.flags : regex.flags + 'g';
+  const re = new RegExp(regex.source, flags);
+  let out = '';
+  let last = 0;
+  for (const m of str.matchAll(re)) {
+    out += str.slice(last, m.index);
+    out += expand(template, m);
+    last = m.index + m[0].length;
+    if (m[0] === '') {
+      // Zero-width match: copy one char and advance so we don't loop forever.
+      if (m.index < str.length) out += str[m.index];
+      last = m.index + 1;
+      re.lastIndex = m.index + 1;
+    }
+  }
+  out += str.slice(last);
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Engine
 // ---------------------------------------------------------------------------
 
@@ -215,7 +283,7 @@ function maskField(value, rule) {
 
 // A plain, non-JSON string target: path cannot apply (no-op); regex applies.
 function applyToRawString(value, ctx) {
-  if (ctx.regexp) return value.replace(ctx.regexp, ctx.repl);
+  if (ctx.regexp) return regexReplaceAll(ctx.regexp, value, ctx.repl);
   return value;
 }
 
@@ -239,7 +307,7 @@ function applyToValue(value, ctx) {
 
 // Recurse over containers; substitute on every string leaf.
 function regexReplaceLeaves(node, regexp, repl) {
-  if (typeof node === 'string') return node.replace(regexp, repl);
+  if (typeof node === 'string') return regexReplaceAll(regexp, node, repl);
   if (Array.isArray(node)) return node.map((v) => regexReplaceLeaves(v, regexp, repl));
   if (isPlainObject(node)) {
     const out = {};
@@ -249,4 +317,4 @@ function regexReplaceLeaves(node, regexp, repl) {
   return node;
 }
 
-module.exports = { applyMasking, FIELD_MAP, parsePath, transform, regexReplaceLeaves };
+module.exports = { applyMasking, FIELD_MAP, parsePath, transform, regexReplaceLeaves, expand, regexReplaceAll };

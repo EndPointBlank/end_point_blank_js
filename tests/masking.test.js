@@ -83,6 +83,76 @@ describe('applyMasking — regex-only', () => {
   });
 });
 
+describe('applyMasking — regex replacement backreferences', () => {
+  // Reference vectors from the shared contract spec.
+  test('vector: $1-XX-XXXX', () => {
+    const payload = { request: '123-45-6789' };
+    const out = applyMasking(payload, 'request', [rule('request_body', { regex: '(\\d{3})-(\\d{2})-(\\d{4})', replacement_value: '$1-XX-XXXX' })], null);
+    expect(out.request).toBe('123-XX-XXXX');
+  });
+
+  test('vector: credit card $1-****-****-$2 (regex-only, raw string)', () => {
+    const payload = { request: '4111-1111-1111-1234' };
+    const out = applyMasking(payload, 'request', [rule('request_body', { regex: '(\\d{4})-\\d{4}-\\d{4}-(\\d{4})', replacement_value: '$1-****-****-$2' })], null);
+    expect(out.request).toBe('4111-****-****-1234');
+  });
+
+  test('vector: credit card $1-****-****-$2 (path + regex, $.card)', () => {
+    const payload = { body: JSON.stringify({ card: '4111-1111-1111-1234' }) };
+    const out = applyMasking(payload, 'response', [rule('response_body', { path: '$.card', regex: '(\\d{4})-\\d{4}-\\d{4}-(\\d{4})', replacement_value: '$1-****-****-$2' })], null);
+    expect(JSON.parse(out.body)).toEqual({ card: '4111-****-****-1234' });
+  });
+
+  test('vector: global multi-match ab1c2 → ab[1]c[2]', () => {
+    const payload = { message: 'ab1c2' };
+    const out = applyMasking(payload, 'error', [rule('error_message', { regex: '(\\d)', replacement_value: '[$1]' })], null);
+    expect(out.message).toBe('ab[1]c[2]');
+  });
+
+  test('vector: swap groups 12-34 → 34/12', () => {
+    const payload = { message: '12-34' };
+    const out = applyMasking(payload, 'error', [rule('error_message', { regex: '(\\d+)-(\\d+)', replacement_value: '$2/$1' })], null);
+    expect(out.message).toBe('34/12');
+  });
+
+  test('vector: out-of-range group $3 on no-such-group → empty', () => {
+    const payload = { message: '42' };
+    const out = applyMasking(payload, 'error', [rule('error_message', { regex: '(\\d+)', replacement_value: '$3' })], null);
+    expect(out.message).toBe('');
+  });
+
+  test('vector: no-group regex with $1 → empty', () => {
+    const payload = { message: '42' };
+    const out = applyMasking(payload, 'error', [rule('error_message', { regex: '\\d+', replacement_value: '$1' })], null);
+    expect(out.message).toBe('');
+  });
+
+  test('vector: $$ → literal dollar', () => {
+    const payload = { message: '5' };
+    const out = applyMasking(payload, 'error', [rule('error_message', { regex: '\\d', replacement_value: '$$' })], null);
+    expect(out.message).toBe('$');
+  });
+
+  test('lone $ not followed by digit or $ is literal', () => {
+    const payload = { message: 'x5y' };
+    const out = applyMasking(payload, 'error', [rule('error_message', { regex: '\\d', replacement_value: 'a$b' })], null);
+    expect(out.message).toBe('xa$by');
+  });
+
+  test('multi-digit group reference $12', () => {
+    const payload = { message: 'abcdefghijklm' };
+    const regex = '(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)(m)';
+    const out = applyMasking(payload, 'error', [rule('error_message', { regex, replacement_value: '<$12>' })], null);
+    expect(out.message).toBe('<l>');
+  });
+
+  test('$0 is the whole match', () => {
+    const payload = { message: 'foo' };
+    const out = applyMasking(payload, 'error', [rule('error_message', { regex: 'foo', replacement_value: '[$0]' })], null);
+    expect(out.message).toBe('[foo]');
+  });
+});
+
 describe('applyMasking — path + regex (scoped)', () => {
   test('$.note + \\d{3}-\\d{2}-\\d{4} scoped to note only', () => {
     const payload = { request: JSON.stringify({ note: 'ssn 123-45-6789', other: '123-45-6789' }) };
