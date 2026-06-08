@@ -242,15 +242,19 @@ function applyRule(payload, recordType, rule) {
 function compiled(rule) {
   // Returns a precomputed { tokens, regexp, repl } context for the rule.
   const repl = rule.replacement_value == null || rule.replacement_value === '' ? '...' : rule.replacement_value;
-  const tokens = rule.path != null && rule.path !== '' ? parsePath(rule.path) : null;
+  const hasPath = rule.path != null && rule.path !== '';
+  const tokens = hasPath ? parsePath(rule.path) : null;
+  const pathInvalid = hasPath && tokens == null;
+
   let regexp = null;
-  if (rule.regex != null && rule.regex !== '') {
+  if (!pathInvalid && rule.regex != null && rule.regex !== '') {
     try {
       regexp = new RegExp(rule.regex, 'g');
     } catch {
       regexp = null;
     }
   }
+
   return { tokens, regexp, repl };
 }
 
