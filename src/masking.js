@@ -236,7 +236,9 @@ function applyRule(payload, recordType, rule) {
   const fieldMap = FIELD_MAP[recordType] || {};
   const key = fieldMap[rule.target];
   if (!key || !(key in payload) || payload[key] == null) return payload;
-  return { ...payload, [key]: maskField(payload[key], rule) };
+  const masked = maskField(payload[key], rule);
+  if (masked === payload[key]) return payload;
+  return { ...payload, [key]: masked };
 }
 
 function compiled(rule) {
