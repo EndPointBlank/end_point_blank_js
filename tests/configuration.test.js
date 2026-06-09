@@ -30,6 +30,14 @@ test('configure sets logMode', () => {
   expect(config.logMode).toBe(LogMode.DELAYED);
 });
 
+test('configure sets maskingRules and maskHook', () => {
+  const rules = [{ target: 'request_body', path: '$..ssn', replacement_value: '***' }];
+  const hook = (payload) => payload;
+  epb.configure({ maskingRules: rules, maskHook: hook });
+  expect(config.maskingRules).toBe(rules);
+  expect(config.maskHook).toBe(hook);
+});
+
 test('default base urls', () => {
   expect(config.baseUrl).toBe('https://in.endpointblank.com');
   expect(config.logBaseUrl).toBe('https://log.endpointblank.com');
