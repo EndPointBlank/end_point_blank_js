@@ -1,6 +1,16 @@
 'use strict';
 
-const TIMEOUT_MS = 15_000;
+// Per-attempt total timeout budget for a single fetch() call. This is a
+// fire-and-forget telemetry send, so 15s was needlessly generous; 8s is a
+// more sensible ceiling (roughly a ~3s connect + ~5s read budget).
+//
+// Native `fetch` (via AbortController/AbortSignal) only supports a single
+// total deadline per request - there is no way to separately bound the
+// connect phase vs. the read/response phase as some HTTP clients allow.
+// Splitting them would require a lower-level client (e.g. Node's `http`
+// module directly), which is out of scope here, so we just tighten the one
+// knob we have.
+const TIMEOUT_MS = 8_000;
 const RETRY_DELAY_MS = 200;
 const MAX_ATTEMPTS = 3;
 
