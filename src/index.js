@@ -43,6 +43,7 @@ const VERSION = '0.1.0';
  * @param {string} [opts.clientId]
  * @param {string} [opts.clientSecret]
  * @param {string} [opts.baseUrl]
+ * @param {string} [opts.logBaseUrl]
  * @param {string} [opts.environment]
  * @param {string} [opts.appName]
  * @param {number} [opts.workerCount]
@@ -54,7 +55,7 @@ const VERSION = '0.1.0';
  */
 function configure(opts = {}) {
   const allowed = [
-    'clientId', 'clientSecret', 'baseUrl', 'environment', 'appName',
+    'clientId', 'clientSecret', 'baseUrl', 'logBaseUrl', 'environment', 'appName',
     'workerCount', 'logMode', 'versionFinder', 'applicationVersion',
     'tokenTtl', 'cacheTtl', 'maskingRules', 'maskHook',
   ];
