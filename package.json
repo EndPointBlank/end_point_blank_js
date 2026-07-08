@@ -1,6 +1,6 @@
 {
   "name": "end-point-blank-js",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "JavaScript library for EndPointBlank API integration - endpoint tracking, authorization, and error reporting",
   "main": "src/index.js",
   "engines": {
