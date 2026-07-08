@@ -1,0 +1,30 @@
+name: Publish
+
+# Publishes the package to npm when a GitHub Release is published.
+# Requires repo secret NPM_TOKEN (an npm automation token).
+# Skips gracefully (no failure) until that secret is configured.
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+      - run: npm ci
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::warning::NPM_TOKEN not configured — skipping publish. Add it in repo Settings → Secrets to enable."
+            exit 0
+          fi
+          npm publish --access public
