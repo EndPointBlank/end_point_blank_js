@@ -3,6 +3,13 @@
   "version": "0.2.1",
   "description": "JavaScript library for EndPointBlank API integration - endpoint tracking, authorization, and error reporting",
   "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./middleware": "./src/middleware/report-interaction.js",
+    "./express": "./src/express/index.js",
+    "./package.json": "./package.json",
+    "./src/*": "./src/*.js"
+  },
   "engines": {
     "node": ">=18.0.0"
   },
@@ -11,7 +18,7 @@
   },
   "keywords": ["endpointblank", "api", "middleware", "authorization"],
   "author": "Robert A. Lasch <rlasch@gmail.com>",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "devDependencies": {
     "jest": "^29.7.0",
     "express": "^4.18.2"
