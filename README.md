@@ -38,22 +38,19 @@ epb.configure({
 
 // Express: report every request/response, and unhandled errors
 const { reportInteraction, reportInteractionErrorHandler } =
-  require('end-point-blank-js/src/middleware/report-interaction');
+  require('end-point-blank-js/middleware');
 
 app.use(reportInteraction);
 app.use(yourRoutes);
 app.use(reportInteractionErrorHandler); // must be registered after your routes
 ```
 
-> **Note on requiring submodules:** the package's `main` entry (`src/index.js`) only exports the
-> top-level `configure`/`VERSION`/`LogMode`/`UnauthorizedError`/`config` API. Everything else
-> (middleware, Express route guards, `LogWriter`, etc.) currently has no `package.json` `exports`
-> map or subpath `index.js`, so it must be required by its real path under `src/`, e.g.
-> `require('end-point-blank-js/src/middleware/report-interaction')` or
-> `require('end-point-blank-js/src/express/versioned')`. Paths like
-> `end-point-blank-js/middleware` or `end-point-blank-js/express` (as shown in some inline JSDoc
-> comments in this codebase) do **not** currently resolve — use the `src/...` paths shown in this
-> README.
+> **Note on requiring submodules:** the package's `main` entry (`src/index.js`) exports the
+> top-level `configure`/`VERSION`/`LogMode`/`UnauthorizedError`/`config` API. The Express
+> integration is available as a whole via `require('end-point-blank-js/express')` and the
+> reporting middleware via `require('end-point-blank-js/middleware')` (see the `exports` map in
+> `package.json`). Everything else (individual writers, commands, etc.) can still be required by
+> its real path under `src/`, e.g. `require('end-point-blank-js/src/writers/log-writer')`.
 
 ## Configuration
 
@@ -78,7 +75,7 @@ variable > default.**
 | `logMode` | — | `LogMode.DIRECT` | `LogMode.DIRECT` (synchronous POST) or `LogMode.DELAYED` (queued, flushed in the background, batches of 4, bounded at 1000 queued items). |
 | `tokenTtl` | — | `null` | Seconds; sent as `token_ttl` when requesting an access token, if set. |
 | `cacheTtl` | — | `300` | Seconds; TTL for the authentication-cache entries used by the `authenticated`/`authorized` Express guards. |
-| `workerCount` | — | `4` | Reserved for parity with the Ruby gem's threaded writer pool; not currently consumed by any JS code path (Node is single-threaded, so "delayed" mode uses `setImmediate` batching instead). |
+| `workerCount` | — | `4` | Number of concurrent in-flight batch requests `LogMode.DELAYED` uses when draining its background queue (Node is single-threaded, so this is concurrent `setImmediate`/async work rather than OS threads — the closest analog to the Ruby gem's threaded writer pool). |
 | `maskingRules` | — | `[]` | See [Data masking](#data-masking). |
 | `maskHook` | — | `null` | See [Data masking](#data-masking). |
 
@@ -136,8 +133,7 @@ Two independent route-level guards call out to the EndPointBlank API and pass an
 `UnauthorizedError` to `next(err)` on failure (non-201 response):
 
 ```js
-const { authenticated } = require('end-point-blank-js/src/express/authenticated');
-const { authorized } = require('end-point-blank-js/src/express/authorized');
+const { authenticated, authorized } = require('end-point-blank-js/express');
 
 // authenticated: verifies the caller's credentials
 router.get('/protected', authenticated, (req, res) => res.json({ ok: true }));
@@ -172,8 +168,7 @@ Tag a route handler with the API version(s) it supports, then publish your route
 EndPointBlank once at startup:
 
 ```js
-const { versioned } = require('end-point-blank-js/src/express/versioned');
-const { registerExpressEndpoints } = require('end-point-blank-js/src/express/endpoint-registrar');
+const { versioned, registerExpressEndpoints } = require('end-point-blank-js/express');
 
 router.get('/api/users', versioned(['1', '2'], { state: 'Current' }), listUsers);
 router.get('/api/legacy-report', versioned(['1'], { state: 'Deprecated' }), legacyReport);
@@ -274,23 +269,20 @@ dependency). The pieces are:
 
 | Module | Path | Purpose |
 |---|---|---|
-| `reportInteraction`, `reportInteractionErrorHandler` | `end-point-blank-js/src/middleware/report-interaction` | Auto-report every request/response and unhandled error. |
-| `authenticated` | `end-point-blank-js/src/express/authenticated` | Route guard: enforce authentication. |
-| `authorized` | `end-point-blank-js/src/express/authorized` | Route guard: enforce per-endpoint authorization. |
-| `versioned`, `getVersions` | `end-point-blank-js/src/express/versioned` | Tag a route handler with supported API versions. |
-| `registerExpressEndpoints`, `collectEndpoints` | `end-point-blank-js/src/express/endpoint-registrar` | Walk the Express router tree and publish tagged endpoints to EndPointBlank. |
+| `reportInteraction`, `reportInteractionErrorHandler` | `end-point-blank-js/middleware` | Auto-report every request/response and unhandled error. |
+| `authenticated` | `end-point-blank-js/express` | Route guard: enforce authentication. |
+| `authorized` | `end-point-blank-js/express` | Route guard: enforce per-endpoint authorization. |
+| `versioned`, `getVersions` | `end-point-blank-js/express` | Tag a route handler with supported API versions. |
+| `registerExpressEndpoints`, `collectEndpoints` | `end-point-blank-js/express` | Walk the Express router tree and publish tagged endpoints to EndPointBlank. |
 
 Full wiring example:
 
 ```js
 const express = require('express');
 const epb = require('end-point-blank-js');
-const { reportInteraction, reportInteractionErrorHandler } =
-  require('end-point-blank-js/src/middleware/report-interaction');
-const { authenticated } = require('end-point-blank-js/src/express/authenticated');
-const { authorized } = require('end-point-blank-js/src/express/authorized');
-const { versioned } = require('end-point-blank-js/src/express/versioned');
-const { registerExpressEndpoints } = require('end-point-blank-js/src/express/endpoint-registrar');
+const { reportInteraction, reportInteractionErrorHandler } = require('end-point-blank-js/middleware');
+const { authenticated, authorized, versioned, registerExpressEndpoints } =
+  require('end-point-blank-js/express');
 
 epb.configure({
   clientId: process.env.ENDPOINTBLANK_CLIENT_ID,
@@ -356,7 +348,9 @@ src/
   string-truncator.js          # String truncation helper
   middleware/
     report-interaction.js      # Express middleware: request/response/error reporting
+                                # (also the `end-point-blank-js/middleware` export)
   express/
+    index.js                   # Aggregates the exports below (the `end-point-blank-js/express` export)
     authenticated.js           # Route guard
     authorized.js              # Route guard
     versioned.js               # Endpoint version tagging
@@ -377,7 +371,7 @@ tests/                          # Jest test suite mirroring the src/ layout
 
 ## License
 
-MIT — see the `license` field in `package.json`.
+Proprietary — all rights reserved. See [`LICENSE`](./LICENSE).
 
 ## Links
 

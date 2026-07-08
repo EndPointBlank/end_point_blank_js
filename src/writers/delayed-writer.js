@@ -1,8 +1,14 @@
 'use strict';
 
+const { instance: config } = require('../configuration');
 const { DirectWriter } = require('./direct-writer');
 
 const BATCH_SIZE = 4;
+
+// Fallback concurrency when `config.workerCount` is unset/falsy. Mirrors the
+// `Configuration` default so behavior is unchanged for callers who never
+// touch `workerCount`.
+const DEFAULT_WORKER_COUNT = 4;
 
 // Upper bound on how many payloads may sit in the in-memory background queue.
 // Without a cap, a sustained intake outage lets the queue grow unboundedly
@@ -20,8 +26,11 @@ const DROP_WARN_THROTTLE_MS = 30_000;
  * Asynchronous writer that queues payloads and flushes them in the background.
  *
  * JavaScript is single-threaded, so "delayed" means the flush is deferred via
- * `setImmediate` / microtask queue rather than a worker thread. Batches up to
- * 4 payloads per HTTP request.
+ * `setImmediate` / microtask queue rather than an OS thread. Batches up to 4
+ * payloads per HTTP request, and drains the queue using up to
+ * `config.workerCount` concurrent in-flight batch requests (falling back to
+ * `DEFAULT_WORKER_COUNT` when unset/invalid) — the closest single-threaded
+ * analog to the Ruby gem's threaded writer pool.
  *
  * The queue is bounded at `MAX_QUEUE_SIZE`; once full, the oldest queued
  * payloads are dropped to make room for new ones (see `_bound`).
@@ -75,15 +84,32 @@ class DelayedWriter {
   }
 
   async _flush() {
+    const workerCount = Number.isInteger(config.workerCount) && config.workerCount > 0
+      ? config.workerCount
+      : DEFAULT_WORKER_COUNT;
+
+    const workers = Array.from({ length: workerCount }, () => this._drain());
+    await Promise.all(workers);
+
+    this._flushing = false;
+  }
+
+  /**
+   * Repeatedly pulls a batch off the shared queue and flushes it, until the
+   * queue is empty. Multiple `_drain()` calls run concurrently (one per
+   * "worker") so several batches can be in flight at once; `Array.splice` is
+   * synchronous, so concurrent workers never grab overlapping items.
+   */
+  async _drain() {
     while (this._queue.length > 0) {
       const batch = this._queue.splice(0, BATCH_SIZE);
+      if (batch.length === 0) break;
       try {
         await this._direct.write(batch);
       } catch (err) {
         console.error(`[EndPointBlank] DelayedWriter flush error: ${err.message}`);
       }
     }
-    this._flushing = false;
   }
 }
 
