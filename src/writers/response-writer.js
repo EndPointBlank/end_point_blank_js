@@ -34,6 +34,7 @@ const ResponseWriter = {
         body: _truncate(body),
         sent_at: new Date().toISOString(),
         route,
+        method: req ? req.method : null,
         data,
         source_application_environment_id: RequestStore.getSourceApplicationEnvironmentId(),
       };
