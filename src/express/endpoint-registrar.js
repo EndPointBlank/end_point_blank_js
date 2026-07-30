@@ -46,14 +46,17 @@ function collectEndpoints(router, prefix = '') {
         (m) => m !== '_all' && layer.route.methods[m],
       );
 
-      // Look for _epbVersions on any handler in the stack
-      const versions = layer.route.stack
-        .map((l) => getVersions(l.handle))
-        .reduce((acc, v) => Object.assign(acc, v), {});
+      // Look for _epbVersions on any handler in the stack. Several handlers may
+      // each declare versions; they merge, deduplicated, in declaration order.
+      const declared = layer.route.stack.map((l) => getVersions(l.handle)).filter(Boolean);
 
-      // Skip routes with no declared version metadata. An empty array
-      // under a declared state still counts as "declared".
-      if (Object.keys(versions).length === 0) continue;
+      // Skip routes with no declared version metadata at all. `versioned([])` is
+      // still a declaration — the endpoint is reported with no version — which is
+      // why this tests for the absence of any declaration rather than for an
+      // empty version list.
+      if (declared.length === 0) continue;
+
+      const versions = [...new Set(declared.flat())];
 
       for (const method of methods) {
         endpoints.push({ path, http_method: method.toUpperCase(), endpoint_versions: versions });

@@ -7,9 +7,9 @@ const { versioned } = require('../../src/express/versioned');
 function makeApp() {
   const app = express();
 
-  app.get('/api/v1/users', versioned(['v1', 'v2'], { state: 'Current' }), (req, res) => res.json([]));
+  app.get('/api/v1/users', versioned(['v1', 'v2']), (req, res) => res.json([]));
   app.post('/api/v1/users', (req, res) => res.json({}));
-  app.get('/api/v1/users/:id', versioned(['v1'], { state: 'Deprecated' }), (req, res) => res.json({}));
+  app.get('/api/v1/users/:id', versioned(['v1']), (req, res) => res.json({}));
   app.delete('/api/v1/users/:id', (req, res) => res.json({}));
 
   return app;
@@ -35,7 +35,7 @@ test('versioned metadata is included', () => {
   const app = makeApp();
   const endpoints = collectEndpoints(app._router);
   const route = endpoints.find((e) => e.path === '/api/v1/users' && e.http_method === 'GET');
-  expect(route.endpoint_versions).toEqual({ Current: ['v1', 'v2'] });
+  expect(route.endpoint_versions).toEqual(['v1', 'v2']);
 });
 
 test('routes without declared version metadata are skipped', () => {
@@ -50,7 +50,7 @@ test('routes without declared version metadata are skipped', () => {
 test('collects routes from mounted sub-routers', () => {
   const app = express();
   const router = express.Router();
-  router.get('/items', versioned(['v1'], { state: 'Current' }), (req, res) => res.json([]));
+  router.get('/items', versioned(['v1']), (req, res) => res.json([]));
   app.use('/api', router);
 
   const endpoints = collectEndpoints(app._router);
