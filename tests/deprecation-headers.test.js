@@ -155,3 +155,45 @@ describe('DeprecationHeaders.apply', () => {
     expect(() => DeprecationHeaders.apply({}, { deprecated_at: '2026-01-01T00:00:00Z' })).not.toThrow();
   });
 });
+
+describe('DeprecationHeaders with Date objects', () => {
+  // The authorize response carries ISO strings, but the module is public and a
+  // caller holding a parsed Date should not have to re-serialise it.
+  test('accepts a Date as readily as a string', () => {
+    expect(DeprecationHeaders.build({ deprecated_at: new Date('2026-01-01T00:00:00Z') })).toEqual({
+      Deprecation: '@1767225600',
+    });
+  });
+
+  test('ignores an Invalid Date rather than emitting NaN', () => {
+    // `new Date('nonsense')` is still a Date; formatting it would produce
+    // `@NaN`, a header that is worse than no header.
+    expect(DeprecationHeaders.build({ sunset_at: new Date('nonsense') })).toEqual({});
+  });
+
+  test('formats a Date-valued sunset the same as the string form', () => {
+    expect(DeprecationHeaders.build({ sunset_at: new Date('2026-11-11T11:11:11Z') }).Sunset).toBe(
+      'Wed, 11 Nov 2026 11:11:11 GMT',
+    );
+  });
+
+  test('leaves the response alone when setting a header throws', () => {
+    // Node raises ERR_HTTP_HEADERS_SENT if the response has already gone out
+    // and `headersSent` did not catch it. A missing header is a bug; a crash
+    // on a request that already succeeded is an outage.
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const res = {
+      headersSent: false,
+      setHeader: () => {
+        throw new Error('ERR_HTTP_HEADERS_SENT');
+      },
+    };
+
+    expect(() =>
+      DeprecationHeaders.apply(res, { deprecated_at: '2026-01-01T00:00:00Z' }),
+    ).not.toThrow();
+    expect(errorSpy).toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+  });
+});

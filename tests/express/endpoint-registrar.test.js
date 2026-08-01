@@ -1,7 +1,11 @@
 'use strict';
 
+jest.mock('../../src/commands/_http', () => ({ post: jest.fn() }));
+
 const express = require('express');
-const { collectEndpoints } = require('../../src/express/endpoint-registrar');
+const { post } = require('../../src/commands/_http');
+const { instance: config } = require('../../src/configuration');
+const { collectEndpoints, registerExpressEndpoints } = require('../../src/express/endpoint-registrar');
 const { versioned } = require('../../src/express/versioned');
 
 function makeApp() {
@@ -56,4 +60,56 @@ test('collects routes from mounted sub-routers', () => {
   const endpoints = collectEndpoints(app._router);
   const paths = endpoints.map((e) => e.path);
   expect(paths.some((p) => p.includes('items'))).toBe(true);
+});
+
+test('collectEndpoints returns nothing for an app with no routes', () => {
+  // `registerExpressEndpoints` is documented as safe to call from `listen`,
+  // which is reachable before any route has been mounted.
+  expect(collectEndpoints(express()._router)).toEqual([]);
+  expect(collectEndpoints(undefined)).toEqual([]);
+});
+
+describe('registerExpressEndpoints', () => {
+  beforeEach(() => {
+    config._reset();
+    config.clientId = 'client-id';
+    config.clientSecret = 'client-secret';
+    config.appName = 'billing';
+    config.baseUrl = 'https://epb.test';
+    post.mockReset();
+    post.mockResolvedValue({ status: 201, ok: true });
+    jest.spyOn(console, 'info').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    config._reset();
+  });
+
+  test('publishes the app\'s declared endpoints to the portal', async () => {
+    await registerExpressEndpoints(makeApp());
+
+    const published = post.mock.calls[0][2].endpoints;
+    expect(published).toContainEqual({
+      path: '/api/v1/users',
+      http_method: 'GET',
+      endpoint_versions: ['v1', 'v2'],
+    });
+  });
+
+  test('publishes only the routes that declared a version', async () => {
+    await registerExpressEndpoints(makeApp());
+
+    const published = post.mock.calls[0][2].endpoints;
+    expect(published.some((e) => e.http_method === 'POST')).toBe(false);
+  });
+
+  test('does not bring the app down when the portal is unreachable', async () => {
+    // This is called from `app.listen`; an unhandled rejection here would take
+    // out a boot that otherwise succeeded.
+    post.mockResolvedValue(null);
+
+    await expect(registerExpressEndpoints(makeApp())).resolves.toBeUndefined();
+  });
 });

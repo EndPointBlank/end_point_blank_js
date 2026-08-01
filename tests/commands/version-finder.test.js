@@ -66,3 +66,17 @@ test('query param without leading v prefix still works', () => {
   const req = makeReq({ url: '/users?version=v7&other=true', originalUrl: '/users?version=v7&other=true' });
   expect(VersionFinder.find(req)).toBe('7');
 });
+
+test('a non-numeric version parameter is not mistaken for a version', () => {
+  // `?version=latest` names no particular version. Reading it as one would
+  // authorize the request against a version that does not exist.
+  const req = { headers: {}, url: '/students?version=latest' };
+
+  expect(VersionFinder.find(req)).toBeNull();
+});
+
+test('a non-numeric version parameter does not hide one in the path', () => {
+  const req = { headers: {}, url: '/v2/students?version=latest' };
+
+  expect(VersionFinder.find(req)).toBe('2');
+});

@@ -75,3 +75,44 @@ test('expired entries return null', async () => {
   await new Promise((r) => setTimeout(r, 5));
   expect(instance.retrieve('key1')).toBeNull();
 });
+
+describe('bounding the cache', () => {
+  // Authorization is cached per client, route, method and version, so a busy
+  // API with many API keys generates a very large key space. Without a cap the
+  // cache grows for the life of the process and eventually OOMs it.
+  test('stops growing once it is full', () => {
+    for (let i = 0; i < 1500; i++) instance.store(`key-${i}`, `credentials-${i}`);
+
+    expect(instance.size()).toBeLessThanOrEqual(1000);
+  });
+
+  test('keeps the most recently stored entries', () => {
+    for (let i = 0; i < 1500; i++) instance.store(`key-${i}`, `credentials-${i}`);
+
+    expect(instance.retrieve('key-1499')).toBe('credentials-1499');
+    expect(instance.retrieve('key-0')).toBeNull();
+  });
+
+  test('reclaims expired entries before evicting live ones', () => {
+    // An expired entry is worthless; dropping a live one to make room for a
+    // new arrival while dead entries sit in the map would cost a real
+    // round-trip to the authorize service.
+    config.cacheTtl = -1;
+    instance.store('stale', 'old credentials');
+
+    config.cacheTtl = 300;
+    instance.store('fresh', 'new credentials');
+
+    expect(instance.keys()).toEqual(['fresh']);
+  });
+});
+
+test('an unset cache TTL falls back to the default rather than expiring at once', () => {
+  // `config.cacheTtl = null` is a plausible way to try to "turn off" the
+  // setting. Treating it as zero would make every request re-authorize.
+  config.cacheTtl = null;
+
+  instance.store('key', 'credentials');
+
+  expect(instance.retrieve('key')).toBe('credentials');
+});
