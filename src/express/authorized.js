@@ -3,6 +3,8 @@
 const { EndpointAuthorize } = require('../commands/endpoint-authorize');
 const { VersionFinder } = require('../commands/version-finder');
 const { UnauthorizedError } = require('../unauthorized-error');
+const { RequestStore } = require('../request-store');
+const { DeprecationHeaders } = require('../deprecation-headers');
 
 /**
  * Express route middleware that enforces EndPointBlank authorization before
@@ -42,6 +44,11 @@ async function authorized(req, res, next) {
       }
       return next(new UnauthorizedError(`Authorization failed: ${message}`, statusCode));
     }
+
+    // RFC 9745 / RFC 8594. Set here rather than in reportInteraction, because
+    // that middleware only sees the response on `finish` — by which point the
+    // headers have already gone out. This runs before the route does.
+    DeprecationHeaders.apply(res, RequestStore.getDeprecation());
 
     next();
   } catch (err) {
