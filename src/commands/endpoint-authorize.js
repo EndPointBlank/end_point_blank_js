@@ -30,7 +30,10 @@ const EndpointAuthorize = {
   async authorize(req, path, version) {
     const clientAuth = req.headers?.authorization ?? '';
     const method = req.method;
-    const cacheKey = `epb_auth:${clientAuth}:${path}:${method}:${config.appName}`;
+    // The version is part of the key because authorization is decided per
+    // endpoint version, and so is the deprecation carried back with it. Without
+    // it, two callers on different versions of the same route share one entry.
+    const cacheKey = `epb_auth:${clientAuth}:${path}:${method}:${config.appName}:${version}`;
 
     if (authCache.exists(cacheKey)) {
       // The cached value is the deprecation block (or null), not a truthy
