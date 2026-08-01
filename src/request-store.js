@@ -27,7 +27,7 @@ const RequestStore = {
    * @returns {Promise<*>}
    */
   run(request, fn) {
-    return storage.run({ request, sourceEnvId: null, uuid: randomUUID() }, fn);
+    return storage.run({ request, sourceEnvId: null, deprecation: null, uuid: randomUUID() }, fn);
   },
 
   /**
@@ -58,6 +58,31 @@ const RequestStore = {
   getSourceApplicationEnvironmentId() {
     const ctx = storage.getStore();
     return ctx ? ctx.sourceEnvId : null;
+  },
+
+  /**
+   * Stores the authorize response's deprecation block for the current async
+   * context, so the response can be given RFC 9745 / RFC 8594 headers.
+   *
+   * Lives on the per-request context object rather than anywhere module-level:
+   * `AsyncLocalStorage` scopes it to this request's async call chain, so a
+   * concurrent request cannot read it and nothing has to be cleaned up.
+   *
+   * @param {object|null} deprecation
+   */
+  setDeprecation(deprecation) {
+    const ctx = storage.getStore();
+    if (ctx) ctx.deprecation = deprecation;
+  },
+
+  /**
+   * Returns the deprecation block for the current async context, or `null`.
+   *
+   * @returns {object|null}
+   */
+  getDeprecation() {
+    const ctx = storage.getStore();
+    return ctx ? ctx.deprecation : null;
   },
 
   /**

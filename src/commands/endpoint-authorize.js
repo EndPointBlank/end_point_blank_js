@@ -4,6 +4,12 @@ const { instance: config } = require('../configuration');
 const { Authorization } = require('../authorization');
 const { post } = require('./_http');
 const { instance: authCache } = require('./authentication-cache');
+const { RequestStore } = require('../request-store');
+
+// The cache declines to store falsy values, so "authorized, not deprecated"
+// needs a truthy marker of its own — otherwise every such request would miss
+// the cache and re-authorize.
+const NO_DEPRECATION = Object.freeze({ none: true });
 
 /**
  * Authorizes an incoming request by sending its details to the EndPointBlank
@@ -27,6 +33,13 @@ const EndpointAuthorize = {
     const cacheKey = `epb_auth:${clientAuth}:${path}:${method}:${config.appName}`;
 
     if (authCache.exists(cacheKey)) {
+      // The cached value is the deprecation block (or null), not a truthy
+      // marker. Authorization is cached per client+route, so caching a marker
+      // would limit the Deprecation and Sunset headers to cache misses —
+      // roughly one request in N, which reads as a flaky feature rather than a
+      // missing one.
+      const cached = authCache.retrieve(cacheKey);
+      RequestStore.setDeprecation(cached === NO_DEPRECATION ? null : (cached ?? null));
       return { status: 201, ok: true };
     }
 
@@ -56,7 +69,13 @@ const EndpointAuthorize = {
 
     console.info(`[EndPointBlank] Authorization response: ${response.status}`);
     if (response.status === 201) {
-      authCache.store(cacheKey, true);
+      // Read the body once, here. The success path did not previously touch it,
+      // and `response` is a fetch Response whose body can only be consumed once
+      // — so parsing it later in the middleware would leave the caller with a
+      // drained stream.
+      const deprecation = await deprecationFrom(response);
+      RequestStore.setDeprecation(deprecation);
+      authCache.store(cacheKey, deprecation ?? NO_DEPRECATION);
     } else if (response.status > 299) {
       const text = await response.text().catch(() => '');
       console.error(`[EndPointBlank] Authorization failed: ${response.status} - ${text}`);
@@ -64,6 +83,27 @@ const EndpointAuthorize = {
     return response;
   },
 };
+
+/**
+ * The authorize response carries a `deprecation` block only when the version
+ * being called is deprecated. Absent, malformed, or unparseable all mean the
+ * same thing here: nothing to say.
+ *
+ * Clones the response before reading so the caller's body stays consumable —
+ * `authorized.js` reads it on the failure path.
+ *
+ * @param {Response} response
+ * @returns {Promise<object|null>}
+ */
+async function deprecationFrom(response) {
+  try {
+    const source = typeof response.clone === 'function' ? response.clone() : response;
+    const body = await source.json();
+    return body?.deprecation ?? null;
+  } catch {
+    return null;
+  }
+}
 
 function remoteAddr(req) {
   const forwarded = req.headers?.['x-forwarded-for'];
