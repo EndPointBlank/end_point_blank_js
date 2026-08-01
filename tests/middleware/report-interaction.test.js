@@ -1,5 +1,21 @@
 'use strict';
 
+// These tests drive the real middleware, so they must stub the one thing that
+// leaves the process. Mocking `_http` catches every writer at once —
+// RequestWriter and ExceptionWriter both funnel through `post` — and lets the
+// assertions name the URL and payload, which is what makes them able to fail.
+//
+// The earlier version of this file spied on `Writer.prototype.write`. Nothing
+// in this code path constructs a `Writer`: ExceptionWriter builds a
+// DirectWriter directly. So the spy recorded nothing no matter what happened,
+// the "does not log UnauthorizedError" assertion could not fail, and the real
+// calls went out to production intake.
+jest.mock('../../src/commands/_http', () => ({
+  post: jest.fn().mockResolvedValue({ status: 201, ok: true }),
+}));
+
+const { post } = require('../../src/commands/_http');
+const { instance: config } = require('../../src/configuration');
 const { reportInteraction, reportInteractionErrorHandler } = require('../../src/middleware/report-interaction');
 const { RequestStore } = require('../../src/request-store');
 const { UnauthorizedError } = require('../../src/unauthorized-error');
@@ -25,63 +41,94 @@ function makeRes() {
   };
 }
 
-test('stores request in RequestStore during middleware execution', async () => {
-  const req = makeReq();
-  let captured;
+/** Lets the middleware's unawaited fire-and-forget writes settle. */
+const flush = () => new Promise(resolve => setImmediate(resolve));
 
-  await new Promise((resolve) => {
-    reportInteraction(req, makeRes(), () => {
-      captured = RequestStore.get();
-      resolve();
+/** The payloads POSTed to `url`, unwrapped from the `{ payload: [...] }` envelope. */
+function payloadsSentTo(url) {
+  return post.mock.calls
+    .filter(([sentUrl]) => sentUrl === url)
+    .flatMap(([, , body]) => body.payload);
+}
+
+beforeEach(() => {
+  post.mockClear();
+});
+
+describe('reportInteraction', () => {
+  test('stores the request in RequestStore for the duration of the chain', async () => {
+    const req = makeReq();
+    let captured;
+
+    await new Promise(resolve => {
+      reportInteraction(req, makeRes(), () => {
+        captured = RequestStore.get();
+        resolve();
+      });
     });
+
+    expect(captured).toBe(req);
+    await flush();
   });
 
-  expect(captured).toBe(req);
-});
+  test('calls next() to pass control down the chain', async () => {
+    const next = jest.fn();
 
-test('calls next() to pass control down the chain', async () => {
-  const next = jest.fn();
-  const req = makeReq();
-
-  await new Promise((resolve) => {
-    reportInteraction(req, makeRes(), () => {
-      next();
-      resolve();
+    await new Promise(resolve => {
+      reportInteraction(makeReq(), makeRes(), () => {
+        next();
+        resolve();
+      });
     });
+
+    expect(next).toHaveBeenCalled();
+    await flush();
   });
 
-  expect(next).toHaveBeenCalled();
+  test('reports the request to the requests endpoint', async () => {
+    reportInteraction(makeReq({ method: 'POST' }), makeRes(), () => {});
+    await flush();
+
+    const [payload] = payloadsSentTo(config.requestsUrl);
+
+    expect(payload).toMatchObject({
+      path: '/api/v1/test',
+      http_method: 'POST',
+    });
+  });
 });
 
-test('error handler skips logging for UnauthorizedError', async () => {
-  const err = new UnauthorizedError('Not allowed');
-  const next = jest.fn();
-  const req = makeReq();
-  const res = makeRes();
+describe('reportInteractionErrorHandler', () => {
+  test('reports the error to the application errors endpoint', async () => {
+    const next = jest.fn();
 
-  // Spy on writer to ensure it is NOT called
-  const { Writer } = require('../../src/writers/writer');
-  const writeSpy = jest.spyOn(Writer.prototype, 'write').mockResolvedValue();
+    await reportInteractionErrorHandler(new Error('Something broke'), makeReq(), makeRes(), next);
 
-  await reportInteractionErrorHandler(err, req, res, next);
+    const [payload] = payloadsSentTo(config.applicationErrorsUrl);
 
-  expect(writeSpy).not.toHaveBeenCalled();
-  expect(next).toHaveBeenCalledWith(err);
+    expect(payload).toMatchObject({ message: 'Something broke' });
+    expect(next).toHaveBeenCalled();
+  });
 
-  writeSpy.mockRestore();
-});
+  test('does not report an UnauthorizedError', async () => {
+    // A rejected caller is expected behaviour, not an application fault. If
+    // these were reported, a bot probing endpoints would flood the error log.
+    const err = new UnauthorizedError('Not allowed');
+    const next = jest.fn();
 
-test('error handler calls next(err) after reporting', async () => {
-  const err = new Error('Something broke');
-  const next = jest.fn();
-  const req = makeReq();
-  const res = makeRes();
+    await reportInteractionErrorHandler(err, makeReq(), makeRes(), next);
 
-  const { Writer } = require('../../src/writers/writer');
-  const writeSpy = jest.spyOn(Writer.prototype, 'write').mockResolvedValue();
+    expect(payloadsSentTo(config.applicationErrorsUrl)).toEqual([]);
+    expect(next).toHaveBeenCalledWith(err);
+  });
 
-  await reportInteractionErrorHandler(err, req, res, next);
+  test('passes the error down the chain either way', async () => {
+    // Swallowing it here would turn a 500 into a hung request.
+    const err = new Error('Something broke');
+    const next = jest.fn();
 
-  expect(next).toHaveBeenCalledWith(err);
-  writeSpy.mockRestore();
+    await reportInteractionErrorHandler(err, makeReq(), makeRes(), next);
+
+    expect(next).toHaveBeenCalledWith(err);
+  });
 });
