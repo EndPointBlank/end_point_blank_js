@@ -239,3 +239,144 @@ describe('applyMasking — robustness', () => {
     expect(JSON.parse(out.request)).toEqual({ a: '...' });
   });
 });
+
+describe('applyMasking — more of the JSONPath subset', () => {
+  const maskBody = (body, path, replacement_value = '***') =>
+    JSON.parse(
+      applyMasking(
+        { request: JSON.stringify(body) },
+        'request',
+        [rule('request_body', { path, replacement_value })],
+        null,
+      ).request,
+    );
+
+  test('$.creds.* masks every value under a key', () => {
+    expect(maskBody({ creds: { user: 'ada', pass: 'hunter2' }, id: 1 }, '$.creds.*')).toEqual({
+      creds: { user: '***', pass: '***' },
+      id: 1,
+    });
+  });
+
+  test('$.tokens.* masks every element of an array', () => {
+    expect(maskBody({ tokens: ['a', 'b'] }, '$.tokens.*')).toEqual({ tokens: ['***', '***'] });
+  });
+
+  test('a wildcard over a scalar leaves it alone', () => {
+    expect(maskBody({ note: 'plain' }, '$.note.*')).toEqual({ note: 'plain' });
+  });
+
+  test('$.items[1].secret masks one element by index', () => {
+    expect(maskBody({ items: [{ secret: 'a' }, { secret: 'b' }] }, '$.items[1].secret')).toEqual({
+      items: [{ secret: 'a' }, { secret: '***' }],
+    });
+  });
+
+  test('$..token reaches into objects nested inside arrays', () => {
+    // Collections of records are the normal shape of an API body, so a
+    // recursive rule that stopped at the first array would miss almost
+    // everything a customer wrote it for.
+    expect(maskBody({ users: [{ token: 'a' }, { token: 'b' }] }, '$..token')).toEqual({
+      users: [{ token: '***' }, { token: '***' }],
+    });
+  });
+
+  test('$..token leaves scalars that share no key alone', () => {
+    expect(maskBody({ count: 2, users: [{ token: 'a' }] }, '$..token')).toEqual({
+      count: 2,
+      users: [{ token: '***' }],
+    });
+  });
+
+  test.each([
+    ['a path not anchored at the root', 'user.ssn'],
+    ['a path with a stray token', '$user'],
+    ['an unterminated bracket', '$["user'],
+    ['a trailing dot', '$.'],
+    ['a bare recursive descent', '$..'],
+    ['an empty bracket', '$[]'],
+  ])('%s masks nothing rather than everything', (_label, path) => {
+    // A path the SDK cannot parse must select nothing. Falling back to
+    // "matches everything" would replace a customer's whole payload.
+    expect(maskBody({ user: { ssn: '123-45-6789' } }, path)).toEqual({
+      user: { ssn: '123-45-6789' },
+    });
+  });
+});
+
+describe('applyMasking — values that are not strings', () => {
+  test('a regex rule leaves numbers and booleans as they are', () => {
+    // Coercing a leaf to a string to run a regex over it would change the
+    // type on the wire and break anything reading the field.
+    const payload = { request: JSON.stringify({ amount: 42, ok: true, note: 'x1' }) };
+
+    const out = applyMasking(
+      payload,
+      'request',
+      [rule('request_body', { regex: '\\d', replacement_value: '#' })],
+      null,
+    );
+
+    expect(JSON.parse(out.request)).toEqual({ amount: 42, ok: true, note: 'x#' });
+  });
+
+  test('a rule against a field that is not maskable leaves it untouched', () => {
+    const payload = { request: 42 };
+
+    const out = applyMasking(
+      payload,
+      'request',
+      [rule('request_body', { path: '$.a', replacement_value: '#' })],
+      null,
+    );
+
+    expect(out.request).toBe(42);
+  });
+
+  test('a rule against an absent field is a no-op', () => {
+    const payload = { headers: { a: 'b' } };
+
+    expect(applyMasking(payload, 'request', [rule('request_body')], null)).toBe(payload);
+  });
+
+  test('a rule against a null field is a no-op', () => {
+    const payload = { request: null };
+
+    expect(applyMasking(payload, 'request', [rule('request_body', { path: '$.a' })], null)).toBe(
+      payload,
+    );
+  });
+});
+
+describe('applyMasking — regexes that match nothing in particular', () => {
+  test('a pattern that can match the empty string still terminates', () => {
+    // `x*` matches at every position, including zero-width. Advancing by zero
+    // would spin forever and hang the request that triggered it.
+    const payload = { message: 'abc' };
+
+    const out = applyMasking(
+      payload,
+      'error',
+      [rule('error_message', { regex: 'x*', replacement_value: '-' })],
+      null,
+    );
+
+    expect(typeof out.message).toBe('string');
+    expect(out.message.length).toBeLessThan(50);
+  });
+
+  test('a zero-width pattern loses none of the original characters', () => {
+    // The guard against the infinite loop advances a character at a time; it
+    // has to copy that character rather than skip it.
+    const payload = { message: 'ab' };
+
+    const out = applyMasking(
+      payload,
+      'error',
+      [rule('error_message', { regex: '(?:)', replacement_value: '-' })],
+      null,
+    );
+
+    expect(out.message.replace(/-/g, '')).toBe('ab');
+  });
+});
