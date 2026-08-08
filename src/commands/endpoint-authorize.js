@@ -80,7 +80,14 @@ const EndpointAuthorize = {
       RequestStore.setDeprecation(deprecation);
       authCache.store(cacheKey, deprecation ?? NO_DEPRECATION);
     } else if (response.status > 299) {
-      const text = await response.text().catch(() => '');
+      // Clone before reading, for the same reason the 201 path does: a fetch
+      // Response body can only be consumed once, and `authorized.js` reads this
+      // one afterwards to build the error the caller sees. Draining it here
+      // meant every failure — access_denied, missing_target_endpoint,
+      // invalid_credentials — reached the caller as "Authorization service
+      // unavailable", which is both wrong and the least useful thing to page on.
+      const source = typeof response.clone === 'function' ? response.clone() : response;
+      const text = await source.text().catch(() => '');
       console.error(`[EndPointBlank] Authorization failed: ${response.status} - ${text}`);
     }
     return response;
