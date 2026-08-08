@@ -1,5 +1,7 @@
 'use strict';
 
+const { normalizePath } = require('./request-path');
+
 const { EndpointUpdate } = require('../commands/endpoint-update');
 const { getVersions } = require('./versioned');
 
@@ -41,7 +43,10 @@ function collectEndpoints(router, prefix = '') {
   for (const layer of router.stack) {
     if (layer.route) {
       // A concrete route
-      const path = prefix + (layer.route.path || '');
+      // Normalized so an index route on a mounted router registers as
+      // `/books` rather than `/books/`, matching the other SDKs. The authorize
+      // lookup uses the same helper, so the two can never drift.
+      const path = normalizePath(prefix + (layer.route.path || ''));
       const methods = Object.keys(layer.route.methods).filter(
         (m) => m !== '_all' && layer.route.methods[m],
       );
