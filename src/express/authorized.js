@@ -5,6 +5,7 @@ const { VersionFinder } = require('../commands/version-finder');
 const { UnauthorizedError } = require('../unauthorized-error');
 const { RequestStore } = require('../request-store');
 const { DeprecationHeaders } = require('../deprecation-headers');
+const { requestPath } = require('./request-path');
 
 /**
  * Express route middleware that enforces EndPointBlank authorization before
@@ -30,17 +31,31 @@ const { DeprecationHeaders } = require('../deprecation-headers');
  */
 async function authorized(req, res, next) {
   try {
-    const path = req.baseUrl + (req.route?.path || req.path || req.url);
+    const path = requestPath(req);
     const version = VersionFinder.find(req);
 
     const response = await EndpointAuthorize.authorize(req, path, version);
 
     if (!response || response.status !== 201) {
       const statusCode = response ? response.status : 503;
+      // No response at all means the authorize service could not be reached —
+      // the one case the generic message is actually true for.
       let message = 'Authorization service unavailable';
       if (response) {
-        const body = await response.json().catch(() => ({}));
-        message = body.error || (await response.text().catch(() => message));
+        // Read the body exactly once. The previous form called json() and then
+        // text() on the same Response, so the second read could only ever fail:
+        // whichever ran first consumed the stream. Take the text, then try to
+        // parse it, and fall back to the raw text for a non-JSON error.
+        const text = await response.text().catch(() => '');
+        if (text) {
+          let parsed = null;
+          try {
+            parsed = JSON.parse(text);
+          } catch {
+            parsed = null;
+          }
+          message = parsed?.error || text;
+        }
       }
       return next(new UnauthorizedError(`Authorization failed: ${message}`, statusCode));
     }
