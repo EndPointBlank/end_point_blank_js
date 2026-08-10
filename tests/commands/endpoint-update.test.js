@@ -3,6 +3,7 @@
 jest.mock('../../src/commands/_http', () => ({ post: jest.fn() }));
 
 const os = require('os');
+const pkg = require('../../package.json');
 const { post } = require('../../src/commands/_http');
 const { instance: config } = require('../../src/configuration');
 const { EndpointUpdate } = require('../../src/commands/endpoint-update');
@@ -65,8 +66,18 @@ describe('EndpointUpdate', () => {
       await EndpointUpdate.sendUpdate(endpoints);
 
       expect(bodySent().app_version).toBe('2026.08.01');
-      expect(bodySent().lib_version).toBeTruthy();
-      expect(bodySent().lib_version).not.toBe('2026.08.01');
+      expect(bodySent().lib_version).toBe(pkg.version);
+    });
+
+    test('reports the released library version, not a stale copy of it', async () => {
+      // Asserted against package.json rather than against the constant the
+      // payload is built from: this shipped `0.2.2` for two releases while the
+      // package published `0.4.0`, and a self-referential assertion passed the
+      // whole time. The portal answers "who is on which SDK version" from this
+      // field, so it has to track what was actually released.
+      await EndpointUpdate.sendUpdate(endpoints);
+
+      expect(bodySent().lib_version).toBe(pkg.version);
     });
 
     test('sends an empty manifest when the caller has no endpoints to declare', async () => {
