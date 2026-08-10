@@ -24,11 +24,13 @@
  *
  * A forwarded header counts as evidence only once its last hop parses to a
  * value that is actually usable for that field (a real scheme shape for
- * X-Forwarded-Proto, a real port number for X-Forwarded-Port). A blank,
- * whitespace-only or malformed header is treated exactly as if it had never
- * been sent — an unauthenticated caller sending `X-Forwarded-Port:
- * not-a-port` must not be able to blank out an otherwise-resolvable scheme or
- * port.
+ * X-Forwarded-Proto, a real port number for X-Forwarded-Port, a real hostname
+ * for X-Forwarded-Host). A blank, whitespace-only or malformed header is
+ * treated exactly as if it had never been sent — an unauthenticated caller
+ * sending `X-Forwarded-Port: not-a-port` must not be able to blank out an
+ * otherwise-resolvable scheme or port, and a malformed X-Forwarded-Host falls
+ * back to the `Host` header / connection rather than leaving `host`
+ * unresolved.
  *
  * X-Forwarded-Host does not, by itself, mark a request as proxied for scheme
  * or port purposes. `host` has always been directly caller-controlled — it
@@ -67,11 +69,12 @@ function resolveBaseUrl(req, { trustProxyHeaders = true } = {}) {
   if (!req) return {};
   const headers = req.headers || {};
 
-  // forwardedScheme and forwardedPort are already validated here — a header
-  // that fails to parse collapses to null and is indistinguishable, for every
-  // later use in this function, from a header that was never sent.
+  // forwardedScheme, forwardedHost and forwardedPort are already validated
+  // here — a header that fails to parse collapses to null and is
+  // indistinguishable, for every later use in this function, from a header
+  // that was never sent.
   const forwardedScheme = trustProxyHeaders ? _cleanScheme(_lastHop(headers['x-forwarded-proto'])) : null;
-  const forwardedHost = trustProxyHeaders ? _lastHop(headers['x-forwarded-host']) : null;
+  const forwardedHost = trustProxyHeaders ? _usableAuthority(_lastHop(headers['x-forwarded-host'])) : null;
   const forwardedPort = trustProxyHeaders ? _cleanPort(_lastHop(headers['x-forwarded-port']), null) : null;
 
   // X-Forwarded-Host deliberately does not participate: see the module docs
@@ -118,6 +121,17 @@ function _splitAuthority(value) {
     return [authority.slice(0, colon), authority.slice(colon + 1)];
   }
   return [authority, null];
+}
+
+// A forwarded host counts as usable only if its host portion (the part
+// before any embedded port) is itself a value _cleanHost would accept.
+// A caller-supplied port embedded alongside a valid host is left to
+// _cleanPort's own digit/range check downstream, same as the Host header
+// always was — this only gates the host half of the pair.
+function _usableAuthority(value) {
+  if (value === null) return null;
+  const [hostPart] = _splitAuthority(value);
+  return _cleanHost(hostPart) !== null ? value : null;
 }
 
 function _connectionScheme(req) {

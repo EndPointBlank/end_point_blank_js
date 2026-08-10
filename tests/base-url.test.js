@@ -166,9 +166,12 @@ describe('resolveBaseUrl', () => {
     // DNS caps a hostname at 253 characters, and nothing upstream validates
     // X-Forwarded-Host, so a caller can hand this an arbitrarily long one.
     // Dropped, not truncated: a truncated hostname is a plausible-looking
-    // wrong value, and the portal reads this field verbatim.
+    // wrong value, and the portal reads this field verbatim. `host` is
+    // explicitly cleared here so there is no Host-header fallback to mask
+    // the drop — see the next test for the fallback itself.
     const resolved = resolveBaseUrl(req({
       headers: {
+        host: undefined,
         'x-forwarded-host': 'a'.repeat(300),
         'x-forwarded-proto': 'https',
         'x-forwarded-port': '8443',
@@ -178,6 +181,19 @@ describe('resolveBaseUrl', () => {
     expect(resolved).not.toHaveProperty('host');
     expect(resolved.scheme).toBe('https');
     expect(resolved.port).toBe(8443);
+  });
+
+  test('falls back to the Host header when X-Forwarded-Host is malformed', () => {
+    // Finding B's principle applies to X-Forwarded-Host too: a value whose
+    // last hop doesn't parse to a usable hostname is ignored entirely,
+    // exactly as if the header were absent, rather than leaving host
+    // unresolved. If the header really were absent, host would resolve from
+    // the Host header — so junk must fall back the same way.
+    const resolved = resolveBaseUrl(req({
+      headers: { host: 'api.example.com', 'x-forwarded-host': 'not/a valid host?x=1' },
+    }));
+
+    expect(resolved.host).toBe('api.example.com');
   });
 
   test('keeps a 253-byte host and drops a 254-byte one', () => {
