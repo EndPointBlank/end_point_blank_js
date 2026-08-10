@@ -170,14 +170,19 @@ EndPointBlank once at startup:
 ```js
 const { versioned, registerExpressEndpoints } = require('end-point-blank-js/express');
 
-router.get('/api/users', versioned(['1', '2'], { state: 'Current' }), listUsers);
-router.get('/api/legacy-report', versioned(['1'], { state: 'Deprecated' }), legacyReport);
+router.get('/api/users', versioned(['1', '2']), listUsers);
+router.get('/api/legacy-report', versioned(['1']), legacyReport);
 
 app.listen(3000, () => registerExpressEndpoints(app));
 ```
 
 `registerExpressEndpoints` walks the Express router tree and only reports routes that were tagged
-with `versioned(...)` — untagged routes are skipped. Each request's own API version is detected
+with `versioned(...)` — untagged routes are skipped. Note `versioned([])` still counts as tagged:
+the route is reported with no version attached.
+
+Lifecycle state (Current, Deprecated, …) is **not** declared here — it is managed in the
+EndPointBlank portal, where changing it does not require shipping code. This reports which versions
+a route serves, and nothing about what they mean. Each request's own API version is detected
 automatically (in order: a custom `versionFinder`, then the `Accept` header, `X-Api-Version`
 header, `Content-Type` header, a `?version=` query parameter, or a `/v1/...` path segment).
 
@@ -300,7 +305,7 @@ router.get(
   '/api/users/:id',
   authenticated,
   authorized,
-  versioned(['1'], { state: 'Current' }),
+  versioned(['1']),
   (req, res) => res.json({ id: req.params.id }),
 );
 app.use(router);
