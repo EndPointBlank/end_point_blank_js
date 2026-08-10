@@ -21,6 +21,22 @@
  * The flag arrives as an argument rather than being read from the configuration
  * singleton here, so that this module stays framework- and config-free and both
  * states are directly testable.
+ *
+ * A forwarded header counts as evidence only once its last hop parses to a
+ * value that is actually usable for that field (a real scheme shape for
+ * X-Forwarded-Proto, a real port number for X-Forwarded-Port). A blank,
+ * whitespace-only or malformed header is treated exactly as if it had never
+ * been sent — an unauthenticated caller sending `X-Forwarded-Port:
+ * not-a-port` must not be able to blank out an otherwise-resolvable scheme or
+ * port.
+ *
+ * X-Forwarded-Host does not, by itself, mark a request as proxied for scheme
+ * or port purposes. `host` has always been directly caller-controlled — it
+ * comes straight off the `Host` header even with no proxy in front at all —
+ * so its presence proves nothing about whether the connection's own scheme
+ * and port are still trustworthy. Only a validated X-Forwarded-Proto or
+ * X-Forwarded-Port, evidence that specifically speaks to scheme/port,
+ * distrusts the connection's own scheme/port.
  */
 
 const HOSTNAME = /^[a-z0-9._-]+$/;
@@ -28,6 +44,12 @@ const IPV6 = /^\[[0-9a-f:.]+\]$/;
 const SCHEME = /^[a-z][a-z0-9+.-]{0,31}$/;
 const DIGITS = /^[0-9]+$/;
 const DEFAULT_PORTS = { http: 80, https: 443 };
+// DNS's own ceiling. Nothing upstream validates X-Forwarded-Host, so a caller
+// can hand a service an arbitrarily long one; the receiving column is
+// varchar(255), and one oversized value there costs the whole co-batched
+// flush. Every character this module accepts as a host is single-byte ASCII
+// (see HOSTNAME/IPV6 above), so .length here is also the byte count.
+const MAX_HOST_LENGTH = 253;
 
 /**
  * @param {object} req
@@ -36,27 +58,36 @@ const DEFAULT_PORTS = { http: 80, https: 443 };
  *   never treated as proxied and the connection's scheme and port stay evidence.
  * @returns {{scheme?: string, host?: string, port?: number}} only the fields
  *   that resolved. An unresolvable field is absent, never null — the receiver
- *   has to be able to tell "not reported" from "reported as nothing".
+ *   has to be able to tell "not reported" from "reported as nothing". `port`
+ *   is never reported unless `scheme` also resolved: whether a port is the
+ *   scheme's default is undefined when the scheme itself is unknown, and an
+ *   unclassifiable port is worse than none at all.
  */
 function resolveBaseUrl(req, { trustProxyHeaders = true } = {}) {
   if (!req) return {};
   const headers = req.headers || {};
 
-  const forwardedProto = trustProxyHeaders ? _lastHop(headers['x-forwarded-proto']) : null;
+  // forwardedScheme and forwardedPort are already validated here — a header
+  // that fails to parse collapses to null and is indistinguishable, for every
+  // later use in this function, from a header that was never sent.
+  const forwardedScheme = trustProxyHeaders ? _cleanScheme(_lastHop(headers['x-forwarded-proto'])) : null;
   const forwardedHost = trustProxyHeaders ? _lastHop(headers['x-forwarded-host']) : null;
-  const forwardedPort = trustProxyHeaders ? _lastHop(headers['x-forwarded-port']) : null;
-  const proxied = forwardedProto !== null || forwardedHost !== null || forwardedPort !== null;
+  const forwardedPort = trustProxyHeaders ? _cleanPort(_lastHop(headers['x-forwarded-port']), null) : null;
+
+  // X-Forwarded-Host deliberately does not participate: see the module docs
+  // above. Only validated scheme/port evidence distrusts the connection's own
+  // scheme/port; a forwarded host is only ever data.
+  const proxied = forwardedScheme !== null || forwardedPort !== null;
 
   const [hostPart, authorityPort] = _splitAuthority(
     forwardedHost || headers.host || req.hostname || req.host
   );
 
-  const scheme = _cleanScheme(forwardedProto || (proxied ? null : _connectionScheme(req)));
+  const scheme = forwardedScheme || (proxied ? null : _cleanScheme(_connectionScheme(req)));
   const host = _cleanHost(hostPart);
-  const port = _cleanPort(
-    forwardedPort || authorityPort || (proxied ? null : _connectionPort(req)),
-    scheme
-  );
+  const port = scheme
+    ? _cleanPort(forwardedPort || authorityPort || (proxied ? null : _connectionPort(req)), scheme)
+    : null;
 
   const resolved = {};
   if (scheme) resolved.scheme = scheme;
@@ -114,6 +145,9 @@ function _cleanHost(value) {
   if (typeof value !== 'string') return null;
   const host = value.trim().toLowerCase();
   if (!host) return null;
+  // Drop, don't truncate: a truncated hostname is a plausible-looking wrong
+  // value, and this is read verbatim to assemble a base URL downstream.
+  if (host.length > MAX_HOST_LENGTH) return null;
   return HOSTNAME.test(host) || IPV6.test(host) ? host : null;
 }
 

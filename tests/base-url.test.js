@@ -115,4 +115,73 @@ describe('resolveBaseUrl', () => {
 
     expect(resolved).toEqual({ scheme: 'https', host: '[2001:db8::1]', port: 8443 });
   });
+
+  test('omits scheme and port when a proxy reports host and port but never proto', () => {
+    // Finding A: the default-port comparison runs against the *resolved*
+    // scheme. With no X-Forwarded-Proto the scheme never resolves, so a port
+    // here would be unclassifiable (is 443 this scheme's default, or a real
+    // port?) rather than merely unconfirmed. Omit it instead of guessing.
+    const resolved = resolveBaseUrl(req({
+      headers: {
+        host: 'internal.svc',
+        'x-forwarded-host': 'api.example.com',
+        'x-forwarded-port': '443',
+      },
+    }));
+
+    expect(resolved).toEqual({ host: 'api.example.com' });
+  });
+
+  test('ignores a malformed X-Forwarded-Port rather than letting it blank the scheme or port', () => {
+    // Finding B: whether a request "is proxied" must be decided from validated
+    // headers, not raw presence. An unauthenticated caller sending garbage in
+    // X-Forwarded-Port must not be able to suppress the connection/authority
+    // fallback for every request they make.
+    const resolved = resolveBaseUrl(req({
+      protocol: 'https',
+      socket: { localPort: 8080, encrypted: true },
+      headers: { host: 'api.example.com:9000', 'x-forwarded-port': 'not-a-port' },
+    }));
+
+    expect(resolved).toEqual({ scheme: 'https', host: 'api.example.com', port: 9000 });
+  });
+
+  test('ignores a malformed X-Forwarded-Proto rather than letting it erase the scheme', () => {
+    // The junk proto must not blank the scheme: it is treated as though the
+    // header were never sent, so the scheme falls through to the connection
+    // exactly as it would with no X-Forwarded-Proto at all.
+    const resolved = resolveBaseUrl(req({
+      headers: {
+        host: 'internal.svc',
+        'x-forwarded-proto': 'not a scheme',
+        'x-forwarded-host': 'api.example.com',
+      },
+    }));
+
+    expect(resolved.scheme).toBe('https');
+    expect(resolved.host).toBe('api.example.com');
+  });
+
+  test('drops a host longer than DNS allows, while the other fields still resolve', () => {
+    // DNS caps a hostname at 253 characters, and nothing upstream validates
+    // X-Forwarded-Host, so a caller can hand this an arbitrarily long one.
+    // Dropped, not truncated: a truncated hostname is a plausible-looking
+    // wrong value, and the portal reads this field verbatim.
+    const resolved = resolveBaseUrl(req({
+      headers: {
+        'x-forwarded-host': 'a'.repeat(300),
+        'x-forwarded-proto': 'https',
+        'x-forwarded-port': '8443',
+      },
+    }));
+
+    expect(resolved).not.toHaveProperty('host');
+    expect(resolved.scheme).toBe('https');
+    expect(resolved.port).toBe(8443);
+  });
+
+  test('keeps a 253-byte host and drops a 254-byte one', () => {
+    expect(resolveBaseUrl(req({ headers: { host: 'a'.repeat(253) } })).host).toBe('a'.repeat(253));
+    expect(resolveBaseUrl(req({ headers: { host: 'a'.repeat(254) } }))).not.toHaveProperty('host');
+  });
 });
