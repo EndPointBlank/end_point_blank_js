@@ -31,8 +31,7 @@
 
 const { instance: config, LogMode } = require('./configuration');
 const { UnauthorizedError } = require('./unauthorized-error');
-
-const VERSION = '0.2.2';
+const { VERSION } = require('./version');
 
 /**
  * Configure the EndPointBlank library.

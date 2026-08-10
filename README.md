@@ -340,6 +340,7 @@ Release, once the `NPM_TOKEN` repo secret is configured.
 ```
 src/
   index.js                     # Public entry point: configure(), VERSION, LogMode, UnauthorizedError
+  version.js                   # VERSION, read from package.json so it cannot drift
   configuration.js             # Configuration singleton + ENDPOINTBLANK_* env fallbacks
   session-configuration.js     # environment name resolution for error payloads
   authorization.js             # Basic/Bearer auth header generation

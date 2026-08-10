@@ -4,8 +4,7 @@ const os = require('os');
 const { instance: config } = require('../configuration');
 const { Authorization } = require('../authorization');
 const { post } = require('./_http');
-
-const VERSION = '0.2.2';
+const { VERSION } = require('../version');
 
 /**
  * Sends application endpoint registration information to the EndPointBlank API.
