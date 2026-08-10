@@ -94,9 +94,53 @@ describe('RequestWriter.write', () => {
     test('sends nulls rather than guesses when the request says almost nothing', async () => {
       await RequestWriter.write({ headers: {} });
 
-      expect(sentPayload().host).toBeNull();
       expect(sentPayload().path).toBeNull();
       expect(sentPayload().http_method).toBeNull();
+    });
+
+    test('omits host entirely when it cannot be resolved, rather than sending null', async () => {
+      // A null host is indistinguishable from a host that really is nothing.
+      // The four other clients never had a null here; this one did.
+      await RequestWriter.write({ headers: {} });
+
+      expect(sentPayload()).not.toHaveProperty('host');
+      expect(sentPayload()).not.toHaveProperty('scheme');
+      expect(sentPayload()).not.toHaveProperty('port');
+    });
+
+    // The pair below is the wiring check for the flag: same proxied request,
+    // both settings. If the writer ever stops passing the configured value
+    // through, the second test reports api.example.com and fails.
+    const proxiedReq = () => req({
+      protocol: 'http',
+      socket: { localPort: 8080 },
+      hostname: undefined,
+      headers: {
+        host: 'internal.svc:8080',
+        'x-forwarded-proto': 'https',
+        'x-forwarded-host': 'api.example.com',
+        'x-forwarded-port': '443',
+      },
+    });
+
+    test('reports the forwarded values when proxy headers are trusted', async () => {
+      config.trustProxyHeaders = true;
+
+      await RequestWriter.write(proxiedReq());
+
+      expect(sentPayload().scheme).toBe('https');
+      expect(sentPayload().host).toBe('api.example.com');
+      expect(sentPayload()).not.toHaveProperty('port');
+    });
+
+    test('reports the connection and Host header when proxy headers are not trusted', async () => {
+      config.trustProxyHeaders = false;
+
+      await RequestWriter.write(proxiedReq());
+
+      expect(sentPayload().scheme).toBe('http');
+      expect(sentPayload().host).toBe('internal.svc');
+      expect(sentPayload().port).toBe(8080);
     });
   });
 

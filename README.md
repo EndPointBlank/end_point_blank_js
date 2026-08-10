@@ -75,6 +75,7 @@ variable > default.**
 | `logMode` | — | `LogMode.DIRECT` | `LogMode.DIRECT` (synchronous POST) or `LogMode.DELAYED` (queued, flushed in the background, batches of 4, bounded at 1000 queued items). |
 | `tokenTtl` | — | `null` | Seconds; sent as `token_ttl` when requesting an access token, if set. |
 | `cacheTtl` | — | `300` | Seconds; TTL for the authentication-cache entries used by the `authenticated`/`authorized` Express guards. |
+| `trustProxyHeaders` | — | `true` | Whether the per-request `scheme`/`host`/`port` report honors `X-Forwarded-Proto`/`-Host`/`-Port`. See [Reported base URL](#reported-base-url). |
 | `workerCount` | — | `4` | Number of concurrent in-flight batch requests `LogMode.DELAYED` uses when draining its background queue (Node is single-threaded, so this is concurrent `setImmediate`/async work rather than OS threads — the closest analog to the Ruby gem's threaded writer pool). |
 | `maskingRules` | — | `[]` | See [Data masking](#data-masking). |
 | `maskHook` | — | `null` | See [Data masking](#data-masking). |
@@ -85,7 +86,38 @@ itself resolves `explicit > ENDPOINTBLANK_ENV > null`. Error-report payloads (bu
 > NODE_ENV > 'production'`.
 
 There is no env-var fallback for `applicationVersion`, `versionFinder`, `logMode`, `tokenTtl`,
-`cacheTtl`, `workerCount`, `maskingRules`, or `maskHook` — those must be set via `configure()`.
+`cacheTtl`, `trustProxyHeaders`, `workerCount`, `maskingRules`, or `maskHook` — those must be
+set via `configure()`.
+
+### Reported base URL
+
+Every request payload carries the base URL the *caller* used, as three separate fields —
+`scheme`, `host` and `port`. A field that cannot be resolved is omitted rather than sent as
+null. EndPointBlank uses these to fill in an application environment's base URL for you,
+instead of asking someone to type it.
+
+By default the library honors `X-Forwarded-Proto`, `X-Forwarded-Host` and `X-Forwarded-Port`,
+reading the **last** comma-separated hop. It reads them itself and does **not** consult
+Express's `trust proxy` setting, so that all five EndPointBlank clients answer identically for
+the same request. (Express's own `req.hostname` takes the *first* forwarded hop; this
+deliberately differs.)
+
+**Turn this off if your application is reachable directly, with no proxy in front of it** —
+or if you would simply rather report nothing than report something a caller could influence:
+
+```js
+epb.configure({ trustProxyHeaders: false });
+```
+
+With it off, the `X-Forwarded-*` headers are ignored entirely and `scheme`, `host` and `port`
+come from the connection and the `Host` header only.
+
+It defaults to `true` because the alternative is worse for almost everyone. Most production
+deployments sit behind an ALB, nginx, Caddy or an Ingress, and a client that ignored the
+forwarded headers there would not report *nothing* — it would confidently report an internal
+hostname on an internal port. `host` is caller-controlled either way (it has always come from
+the `Host` header), and none of these three values is ever used as an identity or
+authorization key, so the worst case is a wrong *suggestion* that an admin has to approve.
 
 **Explicit configuration:**
 

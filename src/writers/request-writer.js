@@ -6,6 +6,7 @@ const { VersionFinder } = require('../commands/version-finder');
 const { DirectWriter } = require('./direct-writer');
 const { DelayedWriter } = require('./delayed-writer');
 const { applyMasking } = require('../masking');
+const { resolveBaseUrl } = require('../base-url');
 
 /**
  * Sends request payloads to the EndPointBlank API.
@@ -26,13 +27,13 @@ const RequestWriter = {
         app_name: config.appName,
         env: config.environment,
         uuid: RequestStore.getUuid() || headers['x-request-id'] || req.id || null,
-        host: req.hostname || req.host || null,
         headers,
         path: req.path || req.url || null,
         http_method: req.method || null,
         endpoint_version: version,
         request: _readBody(req),
         sent_at: new Date().toISOString(),
+        ...resolveBaseUrl(req, { trustProxyHeaders: config.trustProxyHeaders }),
       };
       const payload = applyMasking(rawPayload, 'request', config.maskingRules, config.maskHook);
       await _writer().write([payload]);

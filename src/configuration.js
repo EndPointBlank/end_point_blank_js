@@ -42,6 +42,7 @@ class Configuration {
     this.applicationVersion = null;
     this.tokenTtl = null;       // seconds
     this.cacheTtl = 300;        // seconds
+    this.trustProxyHeaders = true;
     this.maskingRules = [];
     this.maskHook = null;
   }

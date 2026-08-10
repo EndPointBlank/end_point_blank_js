@@ -56,7 +56,7 @@ function configure(opts = {}) {
   const allowed = [
     'clientId', 'clientSecret', 'baseUrl', 'logBaseUrl', 'environment', 'appName',
     'workerCount', 'logMode', 'versionFinder', 'applicationVersion',
-    'tokenTtl', 'cacheTtl', 'maskingRules', 'maskHook',
+    'tokenTtl', 'cacheTtl', 'trustProxyHeaders', 'maskingRules', 'maskHook',
   ];
   for (const key of allowed) {
     if (opts[key] !== undefined) {
