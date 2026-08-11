@@ -4,94 +4,112 @@ const REFRESH_BUFFER_MS = 2 * 60 * 1000; // 2 minutes
 const MIN_TTL_MS = 30 * 1000; // 30 seconds
 
 /**
- * Singleton cache for access tokens keyed by hostname.
+ * Singleton holding this process's access token.
  *
- * JavaScript is single-threaded, but to avoid stampedes during concurrent
- * async requests for the same hostname, per-hostname in-flight fetch promises
- * are stored and shared.
+ * Intake issues a token against the application environment the authenticating
+ * credential belongs to. The hostname sent with a generation request only
+ * resolves the target server-side; it is not what the token is scoped to. A
+ * process authenticates as exactly one application environment, so it holds
+ * exactly one token, whatever hostnames its callers address it by.
+ *
+ * JavaScript is single-threaded, but a burst of concurrent requests would each
+ * start their own exchange, so the in-flight promise is shared.
  *
  * Equivalent to the Ruby gem's `EndPointBlank::AccessTokens`.
  */
 class AccessTokens {
   constructor() {
-    /** @type {Map<string, {token: string, expiredAt: Date}>} */
-    this._tokens = new Map();
-    /** @type {Map<string, Promise<string|null>>} */
-    this._inflight = new Map();
+    /** @type {{token: string, expiredAt: Date}|null} */
+    this._entry = null;
+    /** @type {Promise<string|null>|null} */
+    this._inflight = null;
   }
 
   /**
-   * Returns a valid access token for *hostname*, fetching a new one if needed.
+   * Returns a valid access token, fetching a new one if none is held or the
+   * held one is close to expiry.
    *
-   * @param {string} hostname
+   * @param {string} hostname the hostname to send with a generation request. It
+   *   tells intake which application environment to resolve and does not select
+   *   which held token comes back — every caller shares one.
    * @returns {Promise<string|null>}
    */
   async token(hostname) {
-    const key = hostname.toLowerCase();
-    const entry = this._tokens.get(key);
-
-    if (entry && entry.expiredAt > new Date(Date.now() + REFRESH_BUFFER_MS)) {
+    const entry = this._entry;
+    if (usable(entry)) {
       return entry.token;
     }
 
-    // Coalesce concurrent fetches for the same hostname
-    if (this._inflight.has(key)) {
-      return this._inflight.get(key);
+    // Coalesce concurrent exchanges
+    if (this._inflight) {
+      return this._inflight;
     }
 
-    const promise = this._fetch(key);
-    this._inflight.set(key, promise);
+    const promise = this._fetch(hostname);
+    this._inflight = promise;
 
     try {
       return await promise;
     } finally {
-      this._inflight.delete(key);
+      this._inflight = null;
     }
   }
 
-  async _fetch(key) {
+  async _fetch(hostname) {
     const { GenerateAccessToken } = require('../commands/generate-access-token');
-    const payload = await GenerateAccessToken.token(key);
+    const payload = await GenerateAccessToken.token(hostname);
 
     if (payload && payload.token) {
-      this._tokens.set(key, {
+      this._entry = {
         token: payload.token,
         expiredAt: parseExpiry(payload.expired_at),
-      });
+      };
       return payload.token;
     }
 
     const error = payload?.error ?? 'unknown error';
-    console.error(`[EndPointBlank] Failed to generate access token for ${key}: ${error}`);
+    console.error(`[EndPointBlank] Failed to generate access token for ${hostname}: ${error}`);
     return null;
   }
 
   /**
-   * Returns `true` if a non-expired token exists for *hostname*.
+   * Returns `true` if a token is held and is not about to expire.
    *
-   * @param {string} hostname
    * @returns {boolean}
    */
-  exists(hostname) {
-    const entry = this._tokens.get(hostname.toLowerCase());
-    return Boolean(entry && entry.expiredAt > new Date(Date.now() + MIN_TTL_MS));
+  exists() {
+    return Boolean(this._entry && this._entry.expiredAt > new Date(Date.now() + MIN_TTL_MS));
   }
 
   /**
-   * Removes the cached token for *hostname*.
+   * Discards the held token, but only if it is still the one the caller had.
    *
-   * @param {string} hostname
+   * Every request in flight when a token is rejected reports the same stale
+   * value. Only the first of them should cause an exchange — the rest are
+   * holding a token that has already been replaced, and clearing on their
+   * behalf would discard a good token and stampede intake.
+   *
+   * @param {string|null|undefined} staleToken the token the caller was rejected
+   *   for; ignored when it is not the one currently held.
    */
-  remove(hostname) {
-    this._tokens.delete(hostname.toLowerCase());
+  invalidate(staleToken) {
+    if (staleToken == null) return;
+
+    if (this._entry && this._entry.token === staleToken) {
+      this._entry = null;
+    }
   }
 
   /**
-   * Clears all cached tokens.
+   * Discards the held token.
    */
   clear() {
-    this._tokens.clear();
+    this._entry = null;
   }
+}
+
+function usable(entry) {
+  return Boolean(entry && entry.expiredAt > new Date(Date.now() + REFRESH_BUFFER_MS));
 }
 
 function parseExpiry(value) {
@@ -109,8 +127,8 @@ const instance = new AccessTokens();
 module.exports = {
   AccessTokens: {
     token: (hostname) => instance.token(hostname),
-    exists: (hostname) => instance.exists(hostname),
-    remove: (hostname) => instance.remove(hostname),
+    exists: () => instance.exists(),
+    invalidate: (staleToken) => instance.invalidate(staleToken),
     clear: () => instance.clear(),
     _instance: instance,
   },
