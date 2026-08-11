@@ -340,7 +340,7 @@ describe('EndpointAuthorize.authorize', () => {
       await authorize(req());
 
       expect(api.calls.token).toHaveLength(2);
-      expect(AccessTokens.exists('api.example.test')).toBe(true);
+      expect(AccessTokens.exists()).toBe(true);
     });
 
     test('caches the authorization the retry earned', async () => {

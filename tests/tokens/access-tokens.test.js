@@ -9,6 +9,11 @@ const { AccessTokens } = require('../../src/tokens/access-tokens');
 /**
  * Only the network is faked; `GenerateAccessToken` runs for real underneath,
  * so these also cover the request the SDK actually makes for a token.
+ *
+ * Intake issues a token against the application environment the authenticating
+ * credential belongs to, not against the hostname the request names. One
+ * process authenticates as one application environment, so it holds one token
+ * and the hostname is only ever part of the generation payload.
  */
 
 const secondsFromNow = seconds => new Date(Date.now() + seconds * 1000).toISOString();
@@ -60,24 +65,17 @@ describe('AccessTokens', () => {
       expect(post).toHaveBeenCalledTimes(1);
     });
 
-    test('treats hostnames case-insensitively', async () => {
-      // DNS is case-insensitive, so `API.Example.test` and `api.example.test`
-      // are one host — caching them apart would double every token request.
+    test('serves every hostname from the one token', async () => {
+      // The hostname arrives on the Host header, so the caller chooses it.
+      // Caching per hostname meant a novel value cost a token exchange and a
+      // database lookup on intake, for a token never scoped to the hostname.
       post.mockResolvedValue(tokenResponse({ token: 'tok-1', expired_at: secondsFromNow(3600) }));
 
-      await AccessTokens.token('API.Example.TEST');
-      await AccessTokens.token('api.example.test');
+      await expect(AccessTokens.token('a.example.test')).resolves.toBe('tok-1');
+      await expect(AccessTokens.token('b.example.test')).resolves.toBe('tok-1');
+      await expect(AccessTokens.token('never.seen.example.test')).resolves.toBe('tok-1');
 
       expect(post).toHaveBeenCalledTimes(1);
-    });
-
-    test('keeps a separate token per hostname', async () => {
-      post
-        .mockResolvedValueOnce(tokenResponse({ token: 'tok-a', expired_at: secondsFromNow(3600) }))
-        .mockResolvedValueOnce(tokenResponse({ token: 'tok-b', expired_at: secondsFromNow(3600) }));
-
-      await expect(AccessTokens.token('a.example.test')).resolves.toBe('tok-a');
-      await expect(AccessTokens.token('b.example.test')).resolves.toBe('tok-b');
     });
 
     test('renews a token that is about to expire rather than presenting it', async () => {
@@ -94,7 +92,7 @@ describe('AccessTokens', () => {
   });
 
   describe('concurrent callers', () => {
-    test('a burst of requests for one host triggers a single token fetch', async () => {
+    test('a burst of requests triggers a single token fetch', async () => {
       // Every inbound request needs a token. Without coalescing, a cold start
       // under load stampedes the token endpoint with one call per request.
       let release;
@@ -113,12 +111,23 @@ describe('AccessTokens', () => {
       expect(post).toHaveBeenCalledTimes(1);
     });
 
-    test('different hosts are fetched independently', async () => {
-      post.mockResolvedValue(tokenResponse({ token: 'tok', expired_at: secondsFromNow(3600) }));
+    test('a burst across different hosts also triggers a single token fetch', async () => {
+      let release;
+      const pending = new Promise(resolve => {
+        release = resolve;
+      });
+      post.mockImplementation(() => pending);
 
-      await Promise.all([AccessTokens.token('a.example.test'), AccessTokens.token('b.example.test')]);
+      const callers = Promise.all([
+        AccessTokens.token('a.example.test'),
+        AccessTokens.token('b.example.test'),
+        AccessTokens.token('c.example.test'),
+      ]);
 
-      expect(post).toHaveBeenCalledTimes(2);
+      release(tokenResponse({ token: 'tok-1', expired_at: secondsFromNow(3600) }));
+
+      await expect(callers).resolves.toEqual(['tok-1', 'tok-1', 'tok-1']);
+      expect(post).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -137,7 +146,7 @@ describe('AccessTokens', () => {
 
     test('tries again on the next call rather than wedging', async () => {
       // The in-flight promise has to be released even on failure, or one
-      // outage would make the host permanently unauthorizable.
+      // outage would make the process permanently unauthorizable.
       post
         .mockResolvedValueOnce(null)
         .mockResolvedValueOnce(tokenResponse({ token: 'tok-1', expired_at: secondsFromNow(3600) }));
@@ -152,7 +161,17 @@ describe('AccessTokens', () => {
 
       await AccessTokens.token('api.example.test');
 
-      expect(AccessTokens.exists('api.example.test')).toBe(false);
+      expect(AccessTokens.exists()).toBe(false);
+    });
+
+    test('a live token is served without asking, so a refused host cannot disturb it', async () => {
+      post.mockResolvedValue(tokenResponse({ token: 'tok-1', expired_at: secondsFromNow(3600) }));
+      await AccessTokens.token('api.example.test');
+
+      await expect(AccessTokens.token('bogus.example.test')).resolves.toBe('tok-1');
+
+      expect(post).toHaveBeenCalledTimes(1);
+      expect(AccessTokens.exists()).toBe(true);
     });
   });
 
@@ -164,7 +183,7 @@ describe('AccessTokens', () => {
 
       await AccessTokens.token('api.example.test');
 
-      expect(AccessTokens.exists('api.example.test')).toBe(true);
+      expect(AccessTokens.exists()).toBe(true);
       expect(post).toHaveBeenCalledTimes(1);
     });
 
@@ -173,67 +192,76 @@ describe('AccessTokens', () => {
 
       await AccessTokens.token('api.example.test');
 
-      expect(AccessTokens.exists('api.example.test')).toBe(true);
+      expect(AccessTokens.exists()).toBe(true);
     });
   });
 
   describe('exists', () => {
-    test('is false for a host never seen', () => {
-      expect(AccessTokens.exists('api.example.test')).toBe(false);
+    test('is false before any token has been issued', () => {
+      expect(AccessTokens.exists()).toBe(false);
     });
 
     test('is true for a live token', async () => {
       post.mockResolvedValue(tokenResponse({ token: 'tok-1', expired_at: secondsFromNow(3600) }));
       await AccessTokens.token('api.example.test');
 
-      expect(AccessTokens.exists('api.example.test')).toBe(true);
+      expect(AccessTokens.exists()).toBe(true);
     });
 
     test('is false for a token already past its expiry', async () => {
       post.mockResolvedValue(tokenResponse({ token: 'tok-1', expired_at: secondsFromNow(-10) }));
       await AccessTokens.token('api.example.test');
 
-      expect(AccessTokens.exists('api.example.test')).toBe(false);
+      expect(AccessTokens.exists()).toBe(false);
     });
   });
 
-  describe('eviction', () => {
-    test('remove forgets the token for one host only', async () => {
+  describe('invalidate', () => {
+    test('drops the token the caller was rejected for', async () => {
       post.mockResolvedValue(tokenResponse({ token: 'tok', expired_at: secondsFromNow(3600) }));
-      await AccessTokens.token('a.example.test');
-      await AccessTokens.token('b.example.test');
+      const current = await AccessTokens.token('api.example.test');
 
-      AccessTokens.remove('a.example.test');
+      AccessTokens.invalidate(current);
 
-      expect(AccessTokens.exists('a.example.test')).toBe(false);
-      expect(AccessTokens.exists('b.example.test')).toBe(true);
+      expect(AccessTokens.exists()).toBe(false);
     });
 
-    test('remove is case-insensitive, so a stale token really goes', async () => {
-      // The 401 retry removes by the hostname it read off the request, which
-      // may differ in case from the one the token was cached under. If that
-      // missed, the retry would present the same dead token again.
-      post.mockResolvedValue(tokenResponse({ token: 'tok', expired_at: secondsFromNow(3600) }));
+    test('ignores a token that has already been replaced', async () => {
+      // What stops a 401 from stampeding. Every request in flight when a token
+      // is rejected reports the same stale value; only the first should cause
+      // an exchange, because the rest are holding a token that has already been
+      // replaced and clearing for them would discard a good one.
+      post
+        .mockResolvedValueOnce(tokenResponse({ token: 'tok-1', expired_at: secondsFromNow(3600) }))
+        .mockResolvedValueOnce(tokenResponse({ token: 'tok-2', expired_at: secondsFromNow(3600) }));
+      const stale = await AccessTokens.token('api.example.test');
+      AccessTokens.invalidate(stale);
       await AccessTokens.token('api.example.test');
 
-      AccessTokens.remove('API.EXAMPLE.TEST');
+      AccessTokens.invalidate(stale);
 
-      expect(AccessTokens.exists('api.example.test')).toBe(false);
+      await expect(AccessTokens.token('api.example.test')).resolves.toBe('tok-2');
+      expect(post).toHaveBeenCalledTimes(2);
     });
 
-    test('remove of an unknown host is harmless', () => {
-      expect(() => AccessTokens.remove('nobody.example.test')).not.toThrow();
+    test('invalidating nothing is harmless', async () => {
+      post.mockResolvedValue(tokenResponse({ token: 'tok-1', expired_at: secondsFromNow(3600) }));
+      await AccessTokens.token('api.example.test');
+
+      expect(() => AccessTokens.invalidate(null)).not.toThrow();
+      expect(() => AccessTokens.invalidate(undefined)).not.toThrow();
+
+      await expect(AccessTokens.token('api.example.test')).resolves.toBe('tok-1');
+      expect(post).toHaveBeenCalledTimes(1);
     });
 
-    test('clear forgets every host', async () => {
+    test('clear forgets the token', async () => {
       post.mockResolvedValue(tokenResponse({ token: 'tok', expired_at: secondsFromNow(3600) }));
       await AccessTokens.token('a.example.test');
-      await AccessTokens.token('b.example.test');
 
       AccessTokens.clear();
 
-      expect(AccessTokens.exists('a.example.test')).toBe(false);
-      expect(AccessTokens.exists('b.example.test')).toBe(false);
+      expect(AccessTokens.exists()).toBe(false);
     });
   });
 });

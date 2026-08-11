@@ -63,7 +63,11 @@ const EndpointAuthorize = {
     let response = await post(config.authorizeUrl, authHeader, body);
 
     if (response && response.status === 401 && authHeader.startsWith('Bearer ')) {
-      AccessTokens.remove(host);
+      // Hand back the token that was rejected rather than clearing whatever is
+      // held now: under load it may already have been replaced by another
+      // request that got here first, and dropping that one would send the whole
+      // wave to exchange again.
+      AccessTokens.invalidate(authHeader.slice('Bearer '.length));
       const retryAuth = await Authorization.header(host);
       response = await post(config.authorizeUrl, retryAuth, body);
     }
