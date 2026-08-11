@@ -173,6 +173,22 @@ describe('AccessTokens', () => {
       expect(post).toHaveBeenCalledTimes(1);
       expect(AccessTokens.exists()).toBe(true);
     });
+
+    test('a failed refresh discards the token it could not replace', async () => {
+      // Only a token already inside the refresh buffer reaches an exchange, so
+      // the one left behind is always close to death. Keeping it means exists()
+      // — whose floor is 30 seconds — goes on calling it usable, and a caller
+      // acting on that presents a credential intake is about to reject.
+      post.mockResolvedValueOnce(
+        tokenResponse({ token: 'nearly-dead', expired_at: secondsFromNow(60) }),
+      );
+      await AccessTokens.token('api.example.test');
+
+      post.mockResolvedValue(tokenResponse({ error: 'revoked' }));
+
+      await expect(AccessTokens.token('api.example.test')).resolves.toBeNull();
+      expect(AccessTokens.exists()).toBe(false);
+    });
   });
 
   describe('expiry given by the service', () => {
