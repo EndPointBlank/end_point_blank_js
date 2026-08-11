@@ -82,9 +82,7 @@ function resolveBaseUrl(req, { trustProxyHeaders = true } = {}) {
   // scheme/port; a forwarded host is only ever data.
   const proxied = forwardedScheme !== null || forwardedPort !== null;
 
-  const [hostPart, authorityPort] = _splitAuthority(
-    forwardedHost || headers.host || req.hostname || req.host
-  );
+  const [hostPart, authorityPort] = _splitAuthority(forwardedHost || _hostAuthority(req));
 
   const scheme = forwardedScheme || (proxied ? null : _cleanScheme(_connectionScheme(req)));
   const host = _cleanHost(hostPart);
@@ -109,8 +107,9 @@ function resolveBaseUrl(req, { trustProxyHeaders = true } = {}) {
  * from it — a value matching no registered row is a hard 422 with no
  * fallback, not a cache miss.
  *
- * `req.hostname` / `req.host` are consulted only when there is no `Host`
- * header at all, so nothing better is ever displaced by falling back to them.
+ * `req.hostname` / `req.host` are consulted only when the `Host` header
+ * carries no value (see `_hostAuthority`), so nothing better is ever displaced
+ * by falling back to them.
  * Under Express's `trust proxy` setting (opt-in, off by default) that
  * fallback can itself end up reflecting X-Forwarded-Host — an accepted,
  * documented tradeoff here, and the same one the Java and Elixir SDKs make
@@ -123,7 +122,7 @@ function resolveBaseUrl(req, { trustProxyHeaders = true } = {}) {
  */
 function resolveHostname(req) {
   if (!req) return null;
-  const [hostPart] = _splitAuthority((req.headers || {}).host || req.hostname || req.host);
+  const [hostPart] = _splitAuthority(_hostAuthority(req));
   return _cleanHost(hostPart);
 }
 
@@ -131,6 +130,34 @@ function _lastHop(value) {
   if (typeof value !== 'string') return null;
   const hops = value.split(',').map(hop => hop.trim()).filter(hop => hop.length > 0);
   return hops.length ? hops[hops.length - 1] : null;
+}
+
+/**
+ * The authority the caller addressed, before any validation: the `Host` header
+ * when it carries a value, otherwise the framework's own server name.
+ *
+ * An empty `Host` header is treated as absent, not as present-but-unusable. A
+ * caller that sends `Host:` with no value has said nothing about which host it
+ * meant, so there is nothing there to prefer over the server-name fallback.
+ * The fallback is not caller-controlled either, so falling through to it
+ * concedes no control the caller did not already have.
+ *
+ * On the authorize path the alternative is worse than cosmetic: resolving to
+ * null there drops the request to Basic auth and skips the token mint, where
+ * falling through yields a usable application-environment lookup key.
+ *
+ * Python, Java and this library already fell through, because "" is falsy in
+ * all three; Ruby and Elixir stopped, because "" is truthy in both. One
+ * expression written five times, diverging only on the empty case. It now
+ * lives at a single site per SDK, and this comment is why.
+ *
+ * @param {object} req
+ * @returns {string|null|undefined} the raw authority — `_splitAuthority` and
+ *   `_cleanHost` still have to run on it.
+ */
+function _hostAuthority(req) {
+  const host = (req.headers || {}).host;
+  return host || req.hostname || req.host;
 }
 
 // "api.example.com:8443" -> ["api.example.com", "8443"]

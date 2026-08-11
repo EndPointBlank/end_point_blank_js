@@ -201,6 +201,15 @@ describe('resolveBaseUrl', () => {
     expect(resolveBaseUrl(req({ headers: { host: 'a'.repeat(254) } }))).not.toHaveProperty('host');
   });
 
+  test('treats an empty Host header as absent and falls back to req.hostname', () => {
+    // This is the cross-SDK contract, not an accident of JS falsiness: an
+    // empty Host header names no host, so the server-name fallback stands.
+    // All five SDKs state it at one site each — see _hostAuthority.
+    const resolved = resolveBaseUrl(req({ headers: { host: '' }, hostname: 'api.example.test' }));
+
+    expect(resolved.host).toBe('api.example.test');
+  });
+
   describe('resolveHostname', () => {
     test('lowercases the host and strips the port', () => {
       expect(resolveHostname(req())).toBe('api.example.com');
@@ -225,12 +234,21 @@ describe('resolveBaseUrl', () => {
       expect(resolveHostname({ headers: {}, hostname: 'api.example.test' })).toBe('api.example.test');
     });
 
+    test('falls back to req.hostname when the Host header is empty', () => {
+      expect(resolveHostname({ headers: { host: '' }, hostname: 'api.example.test' }))
+        .toBe('api.example.test');
+    });
+
     test('returns null for a host that is not shaped like a hostname', () => {
       expect(resolveHostname(req({ headers: { host: 'api.example.com/../evil' } }))).toBeNull();
     });
 
     test('returns null for a host longer than DNS allows', () => {
       expect(resolveHostname(req({ headers: { host: `${'a'.repeat(250)}.example.com` } }))).toBeNull();
+    });
+
+    test('returns null for an empty Host header with nothing to fall back to', () => {
+      expect(resolveHostname({ headers: { host: '' } })).toBeNull();
     });
 
     test('returns null when handed no request', () => {
