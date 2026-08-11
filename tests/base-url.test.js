@@ -1,6 +1,6 @@
 'use strict';
 
-const { resolveBaseUrl } = require('../src/base-url');
+const { resolveBaseUrl, resolveHostname } = require('../src/base-url');
 
 describe('resolveBaseUrl', () => {
   const req = (overrides = {}) => ({
@@ -199,5 +199,42 @@ describe('resolveBaseUrl', () => {
   test('keeps a 253-byte host and drops a 254-byte one', () => {
     expect(resolveBaseUrl(req({ headers: { host: 'a'.repeat(253) } })).host).toBe('a'.repeat(253));
     expect(resolveBaseUrl(req({ headers: { host: 'a'.repeat(254) } }))).not.toHaveProperty('host');
+  });
+
+  describe('resolveHostname', () => {
+    test('lowercases the host and strips the port', () => {
+      expect(resolveHostname(req())).toBe('api.example.com');
+    });
+
+    test('keeps an IPv6 literal whole and bracketed', () => {
+      expect(resolveHostname(req({ headers: { host: '[2001:DB8::1]:8443' } }))).toBe('[2001:db8::1]');
+    });
+
+    // target_hostname is the portal's application-environment lookup key. A
+    // value matching no registered row is a hard 422, not a cache miss.
+    test('ignores X-Forwarded-Host even though resolveBaseUrl honors it', () => {
+      const proxied = req({
+        headers: { host: 'internal.svc', 'x-forwarded-host': 'api.example.com' },
+      });
+
+      expect(resolveHostname(proxied)).toBe('internal.svc');
+      expect(resolveBaseUrl(proxied).host).toBe('api.example.com');
+    });
+
+    test('ignores req.hostname, which Express resolves through the proxy', () => {
+      expect(resolveHostname({ headers: {}, hostname: 'api.example.com' })).toBeNull();
+    });
+
+    test('returns null for a host that is not shaped like a hostname', () => {
+      expect(resolveHostname(req({ headers: { host: 'api.example.com/../evil' } }))).toBeNull();
+    });
+
+    test('returns null for a host longer than DNS allows', () => {
+      expect(resolveHostname(req({ headers: { host: `${'a'.repeat(250)}.example.com` } }))).toBeNull();
+    });
+
+    test('returns null when handed no request', () => {
+      expect(resolveHostname(null)).toBeNull();
+    });
   });
 });

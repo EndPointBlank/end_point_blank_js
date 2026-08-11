@@ -5,6 +5,7 @@ const { Authorization } = require('../authorization');
 const { post } = require('./_http');
 const { instance: authCache } = require('./authentication-cache');
 const { RequestStore } = require('../request-store');
+const { resolveHostname } = require('../base-url');
 
 // The cache declines to store falsy values, so "authorized, not deprecated"
 // needs a truthy marker of its own — otherwise every such request would miss
@@ -46,7 +47,7 @@ const EndpointAuthorize = {
       return { status: 201, ok: true };
     }
 
-    const host = (req.headers?.host || req.hostname || '').replace(/:\d+$/, '');
+    const host = resolveHostname(req);
     const { AccessTokens } = require('../tokens/access-tokens');
     const authHeader = await Authorization.header(host);
 

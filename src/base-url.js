@@ -99,6 +99,27 @@ function resolveBaseUrl(req, { trustProxyHeaders = true } = {}) {
   return resolved;
 }
 
+/**
+ * The hostname alone, for the authorize path.
+ *
+ * Deliberately not `resolveBaseUrl(req).host`: reads the `Host` header only,
+ * never the forwarded chain, whatever `trustProxyHeaders` is set to. The value
+ * feeds `target_hostname` and the access-token cache key, and the portal
+ * resolves an application environment from it — a value matching no registered
+ * row is a hard 422 with no fallback, not a cache miss.
+ *
+ * `req.hostname` is deliberately not a fallback: under Express it resolves
+ * through `trust proxy` and would read X-Forwarded-Host.
+ *
+ * @param {object} req
+ * @returns {string|null}
+ */
+function resolveHostname(req) {
+  if (!req) return null;
+  const [hostPart] = _splitAuthority((req.headers || {}).host);
+  return _cleanHost(hostPart);
+}
+
 function _lastHop(value) {
   if (typeof value !== 'string') return null;
   const hops = value.split(',').map(hop => hop.trim()).filter(hop => hop.length > 0);
@@ -175,4 +196,4 @@ function _cleanPort(value, scheme) {
   return port;
 }
 
-module.exports = { resolveBaseUrl };
+module.exports = { resolveBaseUrl, resolveHostname };
