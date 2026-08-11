@@ -429,4 +429,34 @@ describe('EndpointAuthorize.authorize', () => {
       expect(response.status).toBe(500);
     });
   });
+
+  describe('the hostname it reports and keys its token cache on', () => {
+    test('lowercases it and strips the port', async () => {
+      await authorize(req({ headers: { host: 'API.Example.TEST:3000' } }));
+
+      expect(api.calls.authorize[0].body.target_hostname).toBe('api.example.test');
+    });
+
+    test('keeps an IPv6 literal whole and bracketed', async () => {
+      await authorize(req({ headers: { host: '[2001:DB8::1]:8443' } }));
+
+      expect(api.calls.authorize[0].body.target_hostname).toBe('[2001:db8::1]');
+    });
+
+    test('ignores X-Forwarded-Host', async () => {
+      await authorize(req({
+        headers: { host: 'internal.svc', 'x-forwarded-host': 'api.example.test' },
+      }));
+
+      expect(api.calls.authorize[0].body.target_hostname).toBe('internal.svc');
+    });
+
+    test('authenticates with Basic and mints no token when the host is unusable', async () => {
+      await authorize(req({ headers: { host: 'api.example.test/../evil' } }));
+
+      expect(api.calls.authorize[0].body.target_hostname).toBeNull();
+      expect(api.calls.authorize[0].authHeader).toMatch(/^Basic /);
+      expect(api.calls.token).toHaveLength(0);
+    });
+  });
 });
