@@ -67,6 +67,12 @@ class AccessTokens {
       return payload.token;
     }
 
+    // Discard whatever is held rather than leaving it behind. Only a token
+    // already inside the refresh buffer reaches an exchange, so what would be
+    // kept is close to death — and `exists()`, whose floor is 30 seconds, would
+    // go on calling it usable right up to the 401 it is about to earn.
+    this._entry = null;
+
     const error = payload?.error ?? 'unknown error';
     console.error(`[EndPointBlank] Failed to generate access token for ${hostname}: ${error}`);
     return null;
