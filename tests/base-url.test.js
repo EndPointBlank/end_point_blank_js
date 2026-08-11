@@ -221,8 +221,8 @@ describe('resolveBaseUrl', () => {
       expect(resolveBaseUrl(proxied).host).toBe('api.example.com');
     });
 
-    test('ignores req.hostname, which Express resolves through the proxy', () => {
-      expect(resolveHostname({ headers: {}, hostname: 'api.example.com' })).toBeNull();
+    test('falls back to req.hostname when there is no Host header at all', () => {
+      expect(resolveHostname({ headers: {}, hostname: 'api.example.test' })).toBe('api.example.test');
     });
 
     test('returns null for a host that is not shaped like a hostname', () => {

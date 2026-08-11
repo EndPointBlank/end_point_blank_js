@@ -102,21 +102,28 @@ function resolveBaseUrl(req, { trustProxyHeaders = true } = {}) {
 /**
  * The hostname alone, for the authorize path.
  *
- * Deliberately not `resolveBaseUrl(req).host`: reads the `Host` header only,
- * never the forwarded chain, whatever `trustProxyHeaders` is set to. The value
- * feeds `target_hostname` and the access-token cache key, and the portal
- * resolves an application environment from it — a value matching no registered
- * row is a hard 422 with no fallback, not a cache miss.
+ * Deliberately not `resolveBaseUrl(req).host`: the forwarded chain
+ * (X-Forwarded-Host) is never read directly on this path, whatever
+ * `trustProxyHeaders` is set to. The value feeds `target_hostname` and the
+ * access-token cache key, and the portal resolves an application environment
+ * from it — a value matching no registered row is a hard 422 with no
+ * fallback, not a cache miss.
  *
- * `req.hostname` is deliberately not a fallback: under Express it resolves
- * through `trust proxy` and would read X-Forwarded-Host.
+ * `req.hostname` / `req.host` are consulted only when there is no `Host`
+ * header at all, so nothing better is ever displaced by falling back to them.
+ * Under Express's `trust proxy` setting (opt-in, off by default) that
+ * fallback can itself end up reflecting X-Forwarded-Host — an accepted,
+ * documented tradeoff here, and the same one the Java and Elixir SDKs make
+ * with their own framework-level accessors (`getServerName()` under Tomcat's
+ * `RemoteIpValve`, `conn.host` under `Plug.RewriteOn`), both likewise
+ * opt-in and off by default.
  *
  * @param {object} req
  * @returns {string|null}
  */
 function resolveHostname(req) {
   if (!req) return null;
-  const [hostPart] = _splitAuthority((req.headers || {}).host);
+  const [hostPart] = _splitAuthority((req.headers || {}).host || req.hostname || req.host);
   return _cleanHost(hostPart);
 }
 
