@@ -70,6 +70,18 @@ class AccessTokens {
 
   async _fetch(baseUrl) {
     const { GenerateAccessToken } = require('../commands/generate-access-token');
+
+    // Captured once, before the mint, and reused by both outcomes below.
+    // _inflight coalesces only by the caller's URL, not by environment (see
+    // the class doc comment), so two different URLs under the same
+    // environment run as two separate concurrent exchanges rather than being
+    // queued behind one another. If this match were recomputed after the
+    // await instead, a slower call could resolve to find that a faster,
+    // unrelated concurrent call for a different URL under the same
+    // environment had already stored a fresh entry that now happens to match
+    // this URL too -- and a failure here would delete that good entry for a
+    // problem that was never its own.
+    const matchedKey = this._matchKey(baseUrl);
     const payload = await GenerateAccessToken.token(baseUrl);
 
     // The key is what intake resolved to, and only that. There is no
@@ -89,9 +101,8 @@ class AccessTokens {
       // mint on every subsequent call. The failure path below already drops
       // the entry it matched; do the same here so success is not the odd
       // one out.
-      const stale = this._matchKey(baseUrl);
-      if (stale !== null && stale !== key) {
-        this._entries.delete(stale);
+      if (matchedKey !== null && matchedKey !== key) {
+        this._entries.delete(matchedKey);
       }
 
       this._entries.set(key, {
@@ -104,10 +115,12 @@ class AccessTokens {
     // A failed refresh must not leave an expiring token behind claiming to be
     // usable — callers would keep presenting it right up to the 401. Only the
     // entry that covers this URL goes: the longest match is the one that was
-    // just found unusable, so a shorter, still-good entry survives.
-    const stale = this._matchKey(baseUrl);
-    if (stale !== null) {
-      this._entries.delete(stale);
+    // found unusable *before the mint started*, so a shorter, still-good
+    // entry survives -- and so does an entry a different concurrent call for
+    // another URL in this same environment stored while this mint was in
+    // flight.
+    if (matchedKey !== null) {
+      this._entries.delete(matchedKey);
     }
 
     console.error(

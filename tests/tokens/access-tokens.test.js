@@ -243,6 +243,46 @@ describe('AccessTokens', () => {
 
       expect(post).toHaveBeenCalledTimes(2);
     });
+
+    test('a failing concurrent mint does not evict a good entry for a different URL under the same environment', async () => {
+      // _inflight coalesces by the caller's URL, not by environment, so two
+      // different URLs under one environment run as two separate concurrent
+      // exchanges. If the matched key were recomputed after the await instead
+      // of captured before it, a slower failing call could see (and delete)
+      // the entry a faster concurrent call already stored for the same
+      // environment.
+      const widget = 'https://example.com/orders/widgets/42';
+      const other = 'https://example.com/orders/anything';
+      const envBase = 'https://example.com/orders';
+
+      let resolveFail;
+      let resolveGood;
+      const pendingFail = new Promise(resolve => {
+        resolveFail = resolve;
+      });
+      const pendingGood = new Promise(resolve => {
+        resolveGood = resolve;
+      });
+
+      post.mockImplementation(async (_url, _auth, body) =>
+        body.base_url === widget ? pendingFail : pendingGood,
+      );
+
+      const call1 = AccessTokens.token(widget); // slow, will fail
+      const call2 = AccessTokens.token(other); // fast, will succeed
+
+      // The fast call settles first and stores its entry.
+      resolveGood(tokenResponse(tokenPayload('tok-good', { baseUrl: envBase })));
+      await expect(call2).resolves.toBe('tok-good');
+
+      // The slow call fails *after* the good entry is already stored.
+      resolveFail(tokenResponse({ error: 'transient 5xx' }));
+      await expect(call1).resolves.toBeNull();
+
+      // The good entry must survive the unrelated, concurrent failure.
+      expect(AccessTokens.exists(envBase)).toBe(true);
+      expect(AccessTokens.exists(other)).toBe(true);
+    });
   });
 
   describe('when a token cannot be obtained', () => {
