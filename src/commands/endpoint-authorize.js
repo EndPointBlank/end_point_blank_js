@@ -48,8 +48,6 @@ const EndpointAuthorize = {
     }
 
     const host = resolveHostname(req);
-    const { AccessTokens } = require('../tokens/access-tokens');
-    const authHeader = await Authorization.header(host);
 
     const body = {
       path,
@@ -61,17 +59,13 @@ const EndpointAuthorize = {
       source_ip: remoteAddr(req),
     };
 
-    let response = await post(config.authorizeUrl, authHeader, body);
-
-    if (response && response.status === 401 && authHeader.startsWith('Bearer ')) {
-      // Hand back the token that was rejected rather than clearing whatever is
-      // held now: under load it may already have been replaced by another
-      // request that got here first, and dropping that one would send the whole
-      // wave to exchange again.
-      AccessTokens.invalidate(authHeader.slice('Bearer '.length));
-      const retryAuth = await Authorization.header(host);
-      response = await post(config.authorizeUrl, retryAuth, body);
-    }
+    // Basic, not Bearer. This call is to intake, which already holds this
+    // service's credential -- minting a token to present it back was a hop
+    // that bought nothing. With no Bearer there is no stale token, so the
+    // 401 retry that used to live here is gone: a 401 now means the
+    // credential is wrong, which is worth surfacing rather than retrying.
+    const authHeader = await Authorization.header();
+    const response = await post(config.authorizeUrl, authHeader, body);
 
     if (!response) return null;
 

@@ -8,6 +8,7 @@ const { GenerateAccessToken } = require('../../src/commands/generate-access-toke
 
 describe('GenerateAccessToken.token', () => {
   const okResponse = body => ({ status: 201, ok: true, json: async () => body });
+  const BASE_URL = 'https://api.example.test/orders';
 
   beforeEach(() => {
     config._reset();
@@ -24,14 +25,14 @@ describe('GenerateAccessToken.token', () => {
     config._reset();
   });
 
-  test('asks the access token endpoint for the given hostname', async () => {
+  test('asks the access token endpoint for the given base URL', async () => {
     post.mockResolvedValue(okResponse({ token: 'tok-1' }));
 
-    await GenerateAccessToken.token('api.example.test');
+    await GenerateAccessToken.token(BASE_URL);
 
     const [url, , body] = post.mock.calls[0];
     expect(url).toBe('https://epb.test/api/access_token');
-    expect(body).toEqual({ hostname: 'api.example.test' });
+    expect(body).toEqual({ base_url: BASE_URL });
   });
 
   test('presents the configured client credentials', async () => {
@@ -39,7 +40,7 @@ describe('GenerateAccessToken.token', () => {
     // must go out as Basic or the SDK can never bootstrap.
     post.mockResolvedValue(okResponse({ token: 'tok-1' }));
 
-    await GenerateAccessToken.token('api.example.test');
+    await GenerateAccessToken.token(BASE_URL);
 
     const authHeader = post.mock.calls[0][1];
     expect(Buffer.from(authHeader.replace('Basic ', ''), 'base64').toString()).toBe(
@@ -51,15 +52,15 @@ describe('GenerateAccessToken.token', () => {
     config.tokenTtl = 900;
     post.mockResolvedValue(okResponse({ token: 'tok-1' }));
 
-    await GenerateAccessToken.token('api.example.test');
+    await GenerateAccessToken.token(BASE_URL);
 
-    expect(post.mock.calls[0][2]).toEqual({ hostname: 'api.example.test', token_ttl: 900 });
+    expect(post.mock.calls[0][2]).toEqual({ base_url: BASE_URL, token_ttl: 900 });
   });
 
   test('omits the lifetime entirely when none is configured, letting the service decide', async () => {
     post.mockResolvedValue(okResponse({ token: 'tok-1' }));
 
-    await GenerateAccessToken.token('api.example.test');
+    await GenerateAccessToken.token(BASE_URL);
 
     expect(post.mock.calls[0][2]).not.toHaveProperty('token_ttl');
   });
@@ -69,24 +70,27 @@ describe('GenerateAccessToken.token', () => {
     config.tokenTtl = 0;
     post.mockResolvedValue(okResponse({ token: 'tok-1' }));
 
-    await GenerateAccessToken.token('api.example.test');
+    await GenerateAccessToken.token(BASE_URL);
 
     expect(post.mock.calls[0][2].token_ttl).toBe(0);
   });
 
   test('returns the payload the service sent back', async () => {
-    post.mockResolvedValue(okResponse({ token: 'tok-1', expired_at: '2026-01-01T00:00:00Z' }));
+    post.mockResolvedValue(
+      okResponse({ token: 'tok-1', expired_at: '2026-01-01T00:00:00Z', base_url: BASE_URL }),
+    );
 
-    await expect(GenerateAccessToken.token('api.example.test')).resolves.toEqual({
+    await expect(GenerateAccessToken.token(BASE_URL)).resolves.toEqual({
       token: 'tok-1',
       expired_at: '2026-01-01T00:00:00Z',
+      base_url: BASE_URL,
     });
   });
 
   test('returns an error payload rather than inventing a token', async () => {
     post.mockResolvedValue({ status: 422, ok: false, json: async () => ({ error: 'no such app' }) });
 
-    await expect(GenerateAccessToken.token('api.example.test')).resolves.toEqual({
+    await expect(GenerateAccessToken.token(BASE_URL)).resolves.toEqual({
       error: 'no such app',
     });
   });
@@ -94,7 +98,7 @@ describe('GenerateAccessToken.token', () => {
   test('returns null when the service is unreachable', async () => {
     post.mockResolvedValue(null);
 
-    await expect(GenerateAccessToken.token('api.example.test')).resolves.toBeNull();
+    await expect(GenerateAccessToken.token(BASE_URL)).resolves.toBeNull();
   });
 
   test('returns null rather than throwing when the response is not JSON', async () => {
@@ -108,6 +112,6 @@ describe('GenerateAccessToken.token', () => {
       },
     });
 
-    await expect(GenerateAccessToken.token('api.example.test')).resolves.toBeNull();
+    await expect(GenerateAccessToken.token(BASE_URL)).resolves.toBeNull();
   });
 });

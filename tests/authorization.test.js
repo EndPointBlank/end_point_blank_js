@@ -20,26 +20,33 @@ test('basicCredentials returns base64-encoded clientId:clientSecret', () => {
   expect(decoded).toBe('test-client-id:test-client-secret');
 });
 
-test('header() with no hostname returns Basic auth', async () => {
+test('header() with no base URL returns Basic auth', async () => {
   const header = await Authorization.header();
   expect(header).toMatch(/^Basic /);
   const decoded = Buffer.from(header.slice(6), 'base64').toString();
   expect(decoded).toBe('test-client-id:test-client-secret');
 });
 
-test('header() with null hostname returns Basic auth', async () => {
+test('header() with a null base URL returns Basic auth', async () => {
   const header = await Authorization.header(null);
   expect(header).toMatch(/^Basic /);
 });
 
-// Basic credentials go over the wire on every call; a per-host Bearer token is
-// the credential the SDK is meant to spend once it has one. Only the network is
-// faked here, so the real token cache decides which header comes back.
-describe('header() for a known hostname', () => {
+// Basic credentials go over the wire on every call; a per-base-URL Bearer
+// token is the credential the SDK is meant to spend once it has one. Only the
+// network is faked here, so the real token cache decides which header comes
+// back.
+describe('header() for a known base URL', () => {
+  const BASE_URL = 'https://api.example.test/orders';
+
   const tokenResponse = token => ({
     status: 201,
     ok: true,
-    json: async () => ({ token, expired_at: new Date(Date.now() + 3600 * 1000).toISOString() }),
+    json: async () => ({
+      token,
+      expired_at: new Date(Date.now() + 3600 * 1000).toISOString(),
+      base_url: BASE_URL,
+    }),
   });
 
   beforeEach(() => {
@@ -57,7 +64,17 @@ describe('header() for a known hostname', () => {
   test('returns a Bearer token once one can be obtained', async () => {
     post.mockResolvedValue(tokenResponse('tok-1'));
 
-    await expect(Authorization.header('api.example.test')).resolves.toBe('Bearer tok-1');
+    await expect(Authorization.header(BASE_URL)).resolves.toBe('Bearer tok-1');
+  });
+
+  test('passes the base URL through to the token request untouched', async () => {
+    // The cache and intake both key on the URL as given, so anything the SDK
+    // did to it here would change the answer.
+    post.mockResolvedValue(tokenResponse('tok-1'));
+
+    await Authorization.header(BASE_URL);
+
+    expect(post.mock.calls[0][2]).toEqual({ base_url: BASE_URL });
   });
 
   test('falls back to Basic when no token can be obtained', async () => {
@@ -65,6 +82,6 @@ describe('header() for a known hostname', () => {
     // not to an unauthenticated call the portal will reject.
     post.mockResolvedValue(null);
 
-    await expect(Authorization.header('api.example.test')).resolves.toMatch(/^Basic /);
+    await expect(Authorization.header(BASE_URL)).resolves.toMatch(/^Basic /);
   });
 });
