@@ -475,6 +475,69 @@ describe('AccessTokens', () => {
     });
   });
 
+  describe('a nil, undefined, or empty base URL', () => {
+    // The match helper only touched its argument once there was something to
+    // iterate: a cold cache never runs the loop body, so it can't throw; a
+    // warm cache does run it, and `null.startsWith` / `undefined.startsWith`
+    // blew up. Same call, two outcomes, decided by unrelated traffic that
+    // happened earlier. The warm-cache case is the one that matters -- a
+    // cold cache passes today regardless of the fix and proves nothing.
+    test.each([
+      ['null', null],
+      ['undefined', undefined],
+      ['an empty string', ''],
+    ])('token() does not throw against a warm cache: %s', async (_label, arg) => {
+      post.mockResolvedValueOnce(tokenResponse(tokenPayload('tok-1')));
+      await AccessTokens.token(BASE); // warm the cache with an unrelated entry
+
+      post.mockResolvedValueOnce(tokenResponse({ error: 'no match' }));
+
+      await expect(AccessTokens.token(arg)).resolves.toBeNull();
+    });
+
+    test.each([
+      ['null', null],
+      ['undefined', undefined],
+      ['an empty string', ''],
+    ])('exists() does not throw against a warm cache: %s', async (_label, arg) => {
+      post.mockResolvedValueOnce(tokenResponse(tokenPayload('tok-1')));
+      await AccessTokens.token(BASE); // warm the cache with an unrelated entry
+
+      expect(() => AccessTokens.exists(arg)).not.toThrow();
+      expect(AccessTokens.exists(arg)).toBe(false);
+    });
+  });
+
+  describe('a refresh that resolves to a different base URL', () => {
+    test('evicts the stale matched key instead of letting it shadow the fresh one forever', async () => {
+      // The success path used to add the new key without removing the one it
+      // just matched. When the new canonical base URL is *shorter* than the
+      // stale one -- e.g. https://x.com/orders shrinking to https://x.com --
+      // the stale, longer key keeps winning the longest-match comparison on
+      // every subsequent call, which is unusable, forcing a mint every
+      // single time forever. The sharp assertion is therefore not "the old
+      // key is gone" (exists() can't tell: the new broad entry covers the
+      // same paths the stale narrow one did) but that a third call is served
+      // from cache instead of minting a third time.
+      const narrow = 'https://example.com/orders';
+      const broad = 'https://example.com';
+      const freshPayload = tokenResponse(tokenPayload('fresh', { baseUrl: broad }));
+
+      post
+        .mockResolvedValueOnce(
+          tokenResponse(tokenPayload('stale', { baseUrl: narrow, expiresInSeconds: 60 })),
+        )
+        .mockResolvedValueOnce(freshPayload)
+        .mockResolvedValue(freshPayload);
+
+      await AccessTokens.token(narrow + '/1'); // mints 'stale' under narrow, already inside the refresh buffer
+      await expect(AccessTokens.token(narrow + '/1')).resolves.toBe('fresh'); // refresh resolves to the shorter, broad key
+
+      await expect(AccessTokens.token(narrow + '/1')).resolves.toBe('fresh');
+      expect(post).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('clear', () => {
     test('drops every cached token', async () => {
       const other = 'https://other.example.com';

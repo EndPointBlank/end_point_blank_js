@@ -81,6 +81,19 @@ class AccessTokens {
     const key = payload && payload.base_url;
 
     if (payload && payload.token && key) {
+      // The key intake returned can differ from the one this URL matched
+      // before the mint (a portal edit can shorten or lengthen an
+      // environment's registered base URL). Without removing the old entry
+      // it survives as a duplicate that, being longer, keeps winning the
+      // longest-match comparison over the fresh one -- unusable, forcing a
+      // mint on every subsequent call. The failure path below already drops
+      // the entry it matched; do the same here so success is not the odd
+      // one out.
+      const stale = this._matchKey(baseUrl);
+      if (stale !== null && stale !== key) {
+        this._entries.delete(stale);
+      }
+
       this._entries.set(key, {
         token: payload.token,
         expiredAt: parseExpiry(payload.expired_at),
@@ -157,6 +170,14 @@ class AccessTokens {
    * @returns {string|null}
    */
   _matchKey(baseUrl) {
+    // A nil/undefined/empty argument matches nothing, by construction. This
+    // is the whole fix for the nil-argument crash: without it, an empty
+    // cache never runs the loop below and returns null "by accident", while
+    // a warm cache runs it and calls `.startsWith` on a null/undefined
+    // baseUrl. Handling it here up front makes the two cache states agree,
+    // rather than raising a nicer error from within the loop.
+    if (!baseUrl) return null;
+
     let best = null;
     for (const key of this._entries.keys()) {
       if (baseUrl === key || baseUrl.startsWith(key + '/')) {
