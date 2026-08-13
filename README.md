@@ -11,7 +11,7 @@ This package is **not yet published to npm**. Until it is, install it directly f
 ```sh
 npm install github:EndPointBlank/end_point_blank_js
 # or a pinned ref:
-npm install github:EndPointBlank/end_point_blank_js#v0.2.1
+npm install github:EndPointBlank/end_point_blank_js#v0.6.0
 ```
 
 Once published, the intended install command will be:
