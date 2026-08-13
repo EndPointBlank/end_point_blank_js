@@ -10,11 +10,16 @@ const { EndpointAuthorize } = require('../../src/commands/endpoint-authorize');
 const { RequestStore } = require('../../src/request-store');
 
 /**
- * Everything below `post` is real: `Authorization`, `AccessTokens` and
- * `GenerateAccessToken` all run, so the credential exchange is exercised
- * end-to-end and only the network is faked. That is what makes the expired
- * -token retry assertable — a stubbed `Authorization.header` would hand back
- * the same string twice and hide the whole point of the retry.
+ * Everything below `post` is real: `Authorization` runs, so the credential
+ * built for the call is exercised end-to-end and only the network is faked.
+ *
+ * This call goes to intake, which already holds this service's credential.
+ * Minting an access token in order to present it back would be a hop that
+ * buys nothing, so it is plain Basic -- and with no Bearer there is nothing
+ * that can go stale, which is why there is no 401 retry here. The token
+ * cache is still cleared in setup/teardown as a defensive measure: a warm
+ * cache would let a regression that reintroduced a Bearer header on this
+ * path slip through unnoticed.
  */
 
 const HOUR_FROM_NOW = () => new Date(Date.now() + 3600 * 1000).toISOString();
@@ -113,6 +118,7 @@ describe('EndpointAuthorize.authorize', () => {
   afterEach(() => {
     jest.restoreAllMocks();
     config._reset();
+    AccessTokens.clear();
   });
 
   describe('the authorize request it sends', () => {
@@ -321,60 +327,42 @@ describe('EndpointAuthorize.authorize', () => {
     });
   });
 
-  describe('when the access token has expired', () => {
-    test('discards the stale token and retries with a fresh one', async () => {
-      // Tokens expire server-side ahead of the client's own clock. Without the
-      // retry the SDK would keep presenting the dead token and refuse every
-      // request until its cached copy lapsed.
-      api.authorizeQueue.push(jsonResponse(401, { error: 'token expired' }));
+  describe('the credential it presents', () => {
+    // This call goes to intake, which already holds this service's
+    // credential. Minting an access token in order to present it back was a
+    // hop that bought nothing, so the call is plain Basic -- and with no
+    // Bearer there is nothing that can go stale, which is why the 401 retry
+    // that used to live here is gone.
 
-      const { response } = await authorize(req());
-
-      expect(api.calls.authorize.map(c => c.authHeader)).toEqual(['Bearer tok-1', 'Bearer tok-2']);
-      expect(response.status).toBe(201);
-    });
-
-    test('re-fetches the token rather than reusing the cached one', async () => {
-      api.authorizeQueue.push(jsonResponse(401, { error: 'token expired' }));
-
+    test('authenticates with the configured Basic credentials', async () => {
       await authorize(req());
 
-      expect(api.calls.token).toHaveLength(2);
-      expect(AccessTokens.exists()).toBe(true);
+      const authHeader = api.calls.authorize[0].authHeader;
+      expect(authHeader).toMatch(/^Basic /);
+      expect(Buffer.from(authHeader.slice('Basic '.length), 'base64').toString()).toBe(
+        'client-id:client-secret',
+      );
     });
 
-    test('caches the authorization the retry earned', async () => {
-      api.authorizeQueue.push(jsonResponse(401, { error: 'token expired' }));
-      api.authorizeQueue.push(jsonResponse(201, { authorized: true, deprecation: DEPRECATION }));
+    test('never requests an access token', async () => {
+      // The assertion that pins the change. A token here would be a wasted
+      // round trip on every cache miss, on every inbound request.
+      await authorize(req());
 
-      await authorize(req(), '/students', '1');
-      const { deprecation } = await authorize(req(), '/students', '1');
-
-      expect(deprecation).toEqual(DEPRECATION);
-      expect(api.calls.authorize).toHaveLength(2);
+      expect(api.calls.token).toHaveLength(0);
     });
 
-    test('gives up rather than looping when the retry is also refused', async () => {
-      api.authorizeQueue.push(jsonResponse(401, { error: 'token expired' }));
-      api.authorizeQueue.push(jsonResponse(401, { error: 'still no' }));
-
-      const { response } = await authorize(req());
-
-      expect(response.status).toBe(401);
-      expect(api.calls.authorize).toHaveLength(2);
-    });
-
-    test('does not retry a 401 earned by Basic credentials', async () => {
-      // Basic credentials are configuration, not a cache. Retrying them would
-      // double every rejected request against a misconfigured client id.
-      api.tokens = () => null;
+    test('returns a 401 without retrying', async () => {
+      // Basic credentials do not go stale the way a token does. A 401 now
+      // means the credential is wrong, which is worth surfacing rather than
+      // retrying with the identical request.
       api.authorizeQueue.push(jsonResponse(401, { error: 'bad credentials' }));
 
       const { response } = await authorize(req());
 
-      expect(api.calls.authorize).toHaveLength(1);
-      expect(api.calls.authorize[0].authHeader.startsWith('Basic ')).toBe(true);
       expect(response.status).toBe(401);
+      expect(api.calls.authorize).toHaveLength(1);
+      expect(api.calls.token).toHaveLength(0);
     });
   });
 
@@ -430,7 +418,7 @@ describe('EndpointAuthorize.authorize', () => {
     });
   });
 
-  describe('the hostname it reports and keys its token cache on', () => {
+  describe('the hostname it reports', () => {
     test('lowercases it and strips the port', async () => {
       await authorize(req({ headers: { host: 'API.Example.TEST:3000' } }));
 
@@ -451,12 +439,10 @@ describe('EndpointAuthorize.authorize', () => {
       expect(api.calls.authorize[0].body.target_hostname).toBe('internal.svc');
     });
 
-    test('authenticates with Basic and mints no token when the host is unusable', async () => {
+    test('reports no hostname when the host is unusable', async () => {
       await authorize(req({ headers: { host: 'api.example.test/../evil' } }));
 
       expect(api.calls.authorize[0].body.target_hostname).toBeNull();
-      expect(api.calls.authorize[0].authHeader).toMatch(/^Basic /);
-      expect(api.calls.token).toHaveLength(0);
     });
   });
 });

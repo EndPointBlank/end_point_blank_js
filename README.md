@@ -11,7 +11,7 @@ This package is **not yet published to npm**. Until it is, install it directly f
 ```sh
 npm install github:EndPointBlank/end_point_blank_js
 # or a pinned ref:
-npm install github:EndPointBlank/end_point_blank_js#v0.2.1
+npm install github:EndPointBlank/end_point_blank_js#v0.6.0
 ```
 
 Once published, the intended install command will be:
@@ -179,8 +179,9 @@ router.use(authenticated);
 
 Successful `authorized` checks are cached in-process (keyed on credentials + path + method +
 `appName`) for `cacheTtl` seconds, so repeat calls to the same endpoint skip the network round
-trip. Authorization requests use a cached Bearer token per target hostname when available, falling
-back to HTTP Basic auth built from `clientId`/`clientSecret` (`Authorization.header()`).
+trip. Authorization and authentication requests to EndPointBlank use HTTP Basic auth built from
+`clientId`/`clientSecret` (`Authorization.header()`) — EndPointBlank already holds this service's
+credential, so minting a token to present it back would buy nothing.
 
 Handle `UnauthorizedError` explicitly (it is intentionally *not* reported as an application error —
 see [Request/response/error/log reporting](#requestresponseerrorlog-reporting)):
@@ -193,6 +194,31 @@ app.use((err, req, res, next) => {
   next(err);
 });
 ```
+
+### Authorization headers for your own outbound calls
+
+`Authorization.header(baseUrl)` — required by its real path under `src/`, same as any other
+submodule not covered by the `end-point-blank-js`/`/express`/`/middleware` entry points (see
+"Note on requiring submodules" above) — builds the `Authorization` header for a call *you* are
+making to another EndPointBlank-registered target: a `Bearer` token for that target when one can
+be obtained, otherwise HTTP Basic auth.
+
+```js
+const { Authorization } = require('end-point-blank-js/src/authorization');
+
+// Pass the URL you are about to call, NOT a hostname.
+// Strip any query string or fragment first -- intake rejects both.
+const authHeader = await Authorization.header('https://api.example.com/orders');
+```
+
+The argument is the URL you are about to call. Intake matches it against the registered base URLs
+by longest path prefix, so you do not need to know how the target registered itself —
+`https://api.example.com/orders/widgets/42` resolves to whichever environment owns it.
+
+Tokens are cached per application environment, keyed on the canonical base URL intake resolves the
+request to (not on the URL you passed), so a service that calls several targets holds a token for
+each. Calling `Authorization.header()` with no argument — as the route guards above do — always
+returns the Basic form.
 
 ### Declaring endpoint versions &amp; registering routes
 
@@ -397,7 +423,7 @@ src/
     writer.js, direct-writer.js, delayed-writer.js
     request-writer.js, response-writer.js, exception-writer.js, log-writer.js
   tokens/
-    access-tokens.js           # Bearer token cache/refresh per hostname
+    access-tokens.js           # Access-token cache, keyed on the base URL intake resolves to
   commands/
     _http.js                   # Shared fetch()-based POST helper (timeout + retry)
     basic-authenticate.js, endpoint-authorize.js, endpoint-update.js
