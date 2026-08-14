@@ -4,6 +4,7 @@ const { normalizePath } = require('./request-path');
 
 const { EndpointUpdate } = require('../commands/endpoint-update');
 const { getVersions } = require('./versioned');
+const log = require('../log');
 
 /**
  * Inspects all registered Express routes and publishes the endpoint list to
@@ -25,7 +26,7 @@ const { getVersions } = require('./versioned');
 async function registerExpressEndpoints(app) {
   const endpoints = collectEndpoints(app._router);
   await EndpointUpdate.sendUpdate(endpoints);
-  console.info(`[EndPointBlank] Registered ${endpoints.length} endpoints.`);
+  log.info(`[EndPointBlank] Registered ${endpoints.length} endpoints.`);
 }
 
 /**

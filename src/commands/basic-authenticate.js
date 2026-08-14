@@ -3,6 +3,7 @@
 const { instance: config } = require('../configuration');
 const { Authorization } = require('../authorization');
 const { post } = require('./_http');
+const log = require('../log');
 
 /**
  * Authenticates an incoming request by sending its details to the EndPointBlank
@@ -23,7 +24,7 @@ const BasicAuthenticate = {
     const method = req.method;
     const url = req.originalUrl || req.url || '';
 
-    console.info(
+    log.info(
       `[EndPointBlank] Authenticating request: ${method} ${url} with client_auth: ${clientAuth}`,
     );
 
@@ -40,7 +41,7 @@ const BasicAuthenticate = {
     const response = await post(config.authorizeUrl, authHeader, body);
     if (!response) return null;
 
-    console.info(`[EndPointBlank] Authentication response: ${response.status}`);
+    log.info(`[EndPointBlank] Authentication response: ${response.status}`);
     if (response.status > 299) {
       const text = await response.text().catch(() => '');
       console.error(`[EndPointBlank] Authentication failed: ${response.status} - ${text}`);
