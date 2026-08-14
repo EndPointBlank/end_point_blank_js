@@ -6,6 +6,7 @@ const { post } = require('./_http');
 const { instance: authCache } = require('./authentication-cache');
 const { RequestStore } = require('../request-store');
 const { resolveHostname } = require('../base-url');
+const log = require('../log');
 
 // The cache declines to store falsy values, so "authorized, not deprecated"
 // needs a truthy marker of its own — otherwise every such request would miss
@@ -69,7 +70,7 @@ const EndpointAuthorize = {
 
     if (!response) return null;
 
-    console.info(`[EndPointBlank] Authorization response: ${response.status}`);
+    log.info(`[EndPointBlank] Authorization response: ${response.status}`);
     if (response.status === 201) {
       // Read the body once, here. The success path did not previously touch it,
       // and `response` is a fetch Response whose body can only be consumed once

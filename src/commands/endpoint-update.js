@@ -5,6 +5,7 @@ const { instance: config } = require('../configuration');
 const { Authorization } = require('../authorization');
 const { post } = require('./_http');
 const { VERSION } = require('../version');
+const log = require('../log');
 
 /**
  * Sends application endpoint registration information to the EndPointBlank API.
@@ -39,7 +40,7 @@ class EndpointUpdate {
   }
 
   async _write(data) {
-    console.info(
+    log.info(
       `[EndPointBlank] Sending application update: ` +
         `application=${data.application} environment=${data.environment} ` +
         `app_version=${data.app_version}`
@@ -52,7 +53,7 @@ class EndpointUpdate {
       const body = await response.text();
       console.error(`[EndPointBlank] Failed to update endpoints: ${response.status} - ${body}`);
     } else {
-      console.info(`[EndPointBlank] Endpoints updated successfully: ${response.status}`);
+      log.info(`[EndPointBlank] Endpoints updated successfully: ${response.status}`);
     }
   }
 

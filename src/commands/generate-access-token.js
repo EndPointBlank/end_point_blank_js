@@ -3,6 +3,7 @@
 const { instance: config } = require('../configuration');
 const { Authorization } = require('../authorization');
 const { post } = require('./_http');
+const log = require('../log');
 
 /**
  * Generates an access token by calling the EndPointBlank API.
@@ -34,7 +35,7 @@ const GenerateAccessToken = {
 
     try {
       const data = await response.json();
-      console.info(`[EndPointBlank] Access token response: ${response.status}`);
+      log.info(`[EndPointBlank] Access token response: ${response.status}`);
       return data;
     } catch (err) {
       console.error(`[EndPointBlank] Failed to parse access token response: ${err.message}`);
