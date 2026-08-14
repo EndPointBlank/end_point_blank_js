@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.1
+
+### Fixed
+
+- **Diagnostics now go to stderr, not stdout.** Seven `console.info` calls wrote
+  to stdout, which Node routes to your application's own output. This package
+  runs inside your process, so that corrupts any program whose stdout carries
+  structured data — a CLI emitting JSON, a worker writing a protocol stream —
+  with no way for you to separate the two.
+
+  If you were relying on SDK log lines appearing on stdout, they now appear on
+  stderr. `console.error` and `console.warn` output is unchanged; both already
+  wrote to stderr.
+
 ## 0.6.0
 
 ### Breaking
