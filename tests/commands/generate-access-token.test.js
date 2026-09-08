@@ -87,34 +87,34 @@ describe('GenerateAccessToken.token', () => {
     });
   });
 
-  test('hands back the body of a non-2xx response verbatim rather than inventing a token', async () => {
+  test('answers null for a non-2xx, rather than handing back its error body', async () => {
     // 422 here is not intake's answer to a bad credential -- that is a 401,
     // covered in the tokenResult block below. This stubs the SDK's own
-    // transport with an arbitrary non-success status and pins the legacy
-    // contract: `token()` returns whatever body came back, whatever the
-    // status was. Callers that need to tell the statuses apart use
-    // `tokenResult()`.
+    // transport with an arbitrary non-success status.
+    //
+    // `token()` answers null because no token was minted. Returning the error
+    // document would hand the caller a truthy value for a request that
+    // produced nothing -- the exact failure `tokenResult()` exists to remove,
+    // reintroduced one layer down. A caller that wants the body of a refusal
+    // asks `tokenResult()`, which carries the outcome and the payload.
     post.mockResolvedValue({ status: 422, ok: false, json: async () => ({ error: 'no such app' }) });
 
-    await expect(GenerateAccessToken.token(BASE_URL)).resolves.toEqual({
-      error: 'no such app',
-    });
+    await expect(GenerateAccessToken.token(BASE_URL)).resolves.toBeNull();
   });
 
-  test('hands back the body of a 401 too, unchanged by the outcome classification', async () => {
-    // The legacy contract is parsed-body-or-null and nothing else. A rejected
-    // credential is now classified as such internally, but `token()` must
-    // keep returning exactly what it returned before this existed, or every
-    // published caller changes behaviour on an upgrade.
+  test('answers null for a 401 as well, and leaves the reason to tokenResult', async () => {
+    // A rejected credential is the one failure a caller most needs to act on,
+    // and `token()` is the accessor that cannot express it. Handing back
+    // `{error: ...}` here reads as a result; null reads as what it is. The
+    // outcome is not lost -- `tokenResult()` reports CREDENTIAL_REJECTED with
+    // this same body attached.
     post.mockResolvedValue({
       status: 401,
       ok: false,
       json: async () => ({ error: 'invalid credentials' }),
     });
 
-    await expect(GenerateAccessToken.token(BASE_URL)).resolves.toEqual({
-      error: 'invalid credentials',
-    });
+    await expect(GenerateAccessToken.token(BASE_URL)).resolves.toBeNull();
   });
 
   test('returns null when the service is unreachable', async () => {
@@ -123,14 +123,14 @@ describe('GenerateAccessToken.token', () => {
     await expect(GenerateAccessToken.token(BASE_URL)).resolves.toBeNull();
   });
 
-  test('hands back a 2xx body that carries no usable token, exactly as it always has', async () => {
-    // Such a response is classified as a broken server rather than a success
-    // now, but `token()` is the legacy payload-or-null contract and a
-    // classification must not change what it hands back. The parsed body
-    // rides along on the result precisely so this stays true.
+  test('answers null for a 2xx that minted nothing, however encouraging the status', async () => {
+    // A 201 carrying a token but no base_url is the shape this whole change
+    // exists for: it looks like a mint and is not one. There is nowhere to
+    // cache the token and nothing usable to return, so `token()` says so.
+    // The body is still reachable through `tokenResult().payload`.
     post.mockResolvedValue({ status: 201, ok: true, json: async () => ({ token: 'tok-1' }) });
 
-    await expect(GenerateAccessToken.token(BASE_URL)).resolves.toEqual({ token: 'tok-1' });
+    await expect(GenerateAccessToken.token(BASE_URL)).resolves.toBeNull();
   });
 
   test('returns null rather than throwing when the response is not JSON', async () => {

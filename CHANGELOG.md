@@ -29,7 +29,8 @@
   proxy in front of intake can answer `401` with an HTML page. Only on a 2xx
   does the body get a say: one the SDK cannot read a token out of is reported
   as `SERVER_ERROR` under its real 2xx status. `payload` still carries whatever
-  body came back, so `GenerateAccessToken.token(baseUrl)` returns it unchanged.
+  body came back, so nothing is lost — a caller that wants the body of a
+  failure reads it from the result.
 
 - **`AccessTokens.lastFailure(baseUrl)`** returns `null` or
   `{ outcome, status }` for the most recent failed mint for that URL, cleared
@@ -39,13 +40,29 @@
   must be re-issued, instead of the generic "Failed to generate access token"
   message it shared with every transient failure.
 
+### Changed
+
+- **`GenerateAccessToken.token(baseUrl)` now answers `null` unless a token was
+  actually minted.** It previously returned whatever body came back, whatever
+  the status: an `{error: ...}` document from a 401 or 422, or a 2xx that
+  parsed into something with no usable token in it. Each of those handed the
+  caller a truthy value for a request that produced no token — the same
+  failure `tokenResult` was added to remove, one layer down.
+
+  This aligns the four other SDKs with Elixir, whose equivalent has always
+  answered `nil` for anything that was not a mint.
+
+  **Upgrade note:** a caller doing `const body = await token(url)` and then
+  reading `body.error` gets `null` now. The body has not gone anywhere —
+  `tokenResult(url)` returns `{ outcome, status, payload }` and `payload` is
+  exactly what `token()` used to hand back. Callers that only ever read
+  `body.token` need no change, because a body without a usable token was never
+  something they could act on.
+
 ### Unchanged
 
-- `GenerateAccessToken.token()` and `AccessTokens.token()`/`exists()` keep
-  their exact return contracts — parsed-payload-or-`null` and
-  token-string-or-`null`, including `token()` returning the parsed body of a
-  non-2xx response. This release is purely additive; no upgrade work is
-  required.
+- `AccessTokens.token()`/`exists()` keep their exact return contracts —
+  token-string-or-`null`.
 - Nothing suppresses retries on a 401 yet. The SDK only makes the outcome
   visible; acting on it is the caller's.
 

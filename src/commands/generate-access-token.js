@@ -175,18 +175,28 @@ const GenerateAccessToken = {
   /**
    * Requests a new access token for *baseUrl*.
    *
-   * Unchanged: the parsed body, whatever the status was, or `null` when there
-   * was no body to parse. A caller that needs to tell a rejected credential
-   * from a failing service wants {@link GenerateAccessToken.tokenResult}
-   * instead; this stays as it is so published consumers keep working.
+   * The payload-or-`null` contract, where payload means a token was actually
+   * minted: a 2xx carrying a non-empty `token` and `base_url`. Every other
+   * outcome answers `null`, including a 2xx whose body parsed into something
+   * with no usable token in it, and a 4xx whose body explains the refusal.
+   *
+   * This matches the Elixir SDK, which has always answered `null` for
+   * anything that was not a mint. Returning an error body here would hand a
+   * caller a truthy value for a request that produced no token — the same
+   * failure mode {@link GenerateAccessToken.tokenResult} exists to remove,
+   * reintroduced one layer down. A caller that needs the body of a failure,
+   * or needs to tell a rejected credential from a failing service, wants
+   * `tokenResult` instead: it carries both the outcome and the payload.
    *
    * @param {string} baseUrl sent verbatim. intake normalizes it and matches
    *   it against registered base URLs by longest path prefix.
    * @returns {Promise<object|null>} Object with `token`, `expired_at` and
-   *   `base_url`, or `null` on failure.
+   *   `base_url`, or `null` when no token was minted.
    */
   async token(baseUrl) {
-    return (await GenerateAccessToken.tokenResult(baseUrl)).payload;
+    const result = await GenerateAccessToken.tokenResult(baseUrl);
+
+    return result.outcome === TokenOutcome.SUCCESS ? result.payload : null;
   },
 };
 
