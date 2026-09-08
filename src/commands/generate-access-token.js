@@ -20,17 +20,26 @@ const log = require('../log');
  *   target/source application for the URL (422). Permanent too, but the
  *   remedy is the request or the registration, not the credential — so it
  *   must not share a name that reads as "transient".
- * - `SERVER_ERROR` (5xx, or any other non-2xx status) — intake failed.
- *   Trying again later is reasonable.
+ * - `SERVER_ERROR` — intake failed. A 5xx, any other unexpected non-2xx, or
+ *   a 2xx no access token could be read out of: a body that would not parse,
+ *   one carrying no `token`, or one carrying a `token` and no `base_url`. It
+ *   keeps the real status intake sent, including when that status was a 2xx;
+ *   *why* a 2xx was unusable goes in the log, which is where somebody
+ *   debugging it looks. Trying again later is reasonable.
  * - `TRANSPORT_ERROR` — no usable HTTP status was obtained at all: connection
  *   refused, timeout, `post()`'s own retries exhausted. Also transient.
- * - `SUCCESS` (2xx) — a payload came back. It still has to carry a `token`
- *   and a `base_url` to be usable; that judgement belongs to the caller.
+ * - `SUCCESS` — a token was minted, and nothing weaker: a 2xx whose body
+ *   parsed and carries a non-empty `token` and a non-empty `base_url`. This
+ *   is deliberately not "a payload came back". If `outcome === SUCCESS` can
+ *   be true with the token absent, every caller has to re-check the payload
+ *   by hand — and the re-check somebody forgets is precisely the silent
+ *   failure the outcome exists to make impossible.
  *
  * The status decides, and a body that will not parse never overrides it: a
  * proxy in front of intake can answer 401 with an HTML page, and that
- * credential is being refused just as surely as one refused in JSON. The sole
- * exception is a 2xx the SDK cannot read, which is a broken server.
+ * credential is being refused just as surely as one refused in JSON. Only on
+ * a 2xx does the body get a say, and only because there is nothing else to go
+ * on: the status said yes, so an unusable body means a broken server.
  *
  * Frozen so callers branch on a shared symbol rather than a bare string
  * literal they have retyped.
@@ -50,12 +59,38 @@ const TokenOutcome = Object.freeze({
  *   never landed. Always carried, so a caller can be more precise than the
  *   outcome name when it needs to be.
  * @property {object|null} payload the parsed response body, or `null` when
- *   there was none to parse.
+ *   there was none to parse. Carried whatever the outcome — including on a
+ *   2xx classified `SERVER_ERROR`, so {@link GenerateAccessToken.token}
+ *   still answers exactly the body it always did.
  */
 
 /** @returns {TokenResult} */
 function result(outcome, status, payload) {
   return Object.freeze({ outcome, status, payload });
+}
+
+/**
+ * True when *payload* is a token document the SDK can actually act on.
+ *
+ * Both fields are required, and both have to be non-empty strings. intake's
+ * `base_url` is NOT NULL and it answers 422 rather than minting when the
+ * caller's URL resolves to no environment, so a 2xx without one is a broken
+ * server — and there would be nothing to cache the token under either.
+ *
+ * Written to survive a body that is not a JSON object at all: `response.json()`
+ * happily resolves to `null`, a string, a number or an array, and reading
+ * through one of those inside the customer's own request path would throw.
+ *
+ * @param {*} payload the parsed response body, of whatever shape it turned
+ *   out to be.
+ * @returns {boolean}
+ */
+function minted(payload) {
+  return usableString(payload && payload.token) && usableString(payload && payload.base_url);
+}
+
+function usableString(value) {
+  return typeof value === 'string' && value !== '';
 }
 
 /**
@@ -119,12 +154,18 @@ const GenerateAccessToken = {
     if (readable) log.info(`[EndPointBlank] Access token response: ${response.status}`);
 
     if (status >= 200 && status < 300) {
-      // The one place a parse failure decides the outcome: the status said
-      // yes and there is nothing to act on, which is the same broken server
-      // as a 201 carrying no token.
-      return readable
+      // The one place the body decides the outcome, and only because there is
+      // nothing else to go on. SUCCESS means a token was minted; a 2xx none
+      // could be read out of -- unparseable, no `token`, or a `token` with no
+      // `base_url` -- is a broken server, reported under the real 2xx status
+      // it arrived with rather than a status invented for it.
+      //
+      // The parsed body rides along either way. `token()` is the published
+      // payload-or-null contract, and how this got classified must not change
+      // what that hands back.
+      return minted(data)
         ? result(TokenOutcome.SUCCESS, status, data)
-        : result(TokenOutcome.SERVER_ERROR, status, null);
+        : result(TokenOutcome.SERVER_ERROR, status, data);
     }
     if (status === 401) return result(TokenOutcome.CREDENTIAL_REJECTED, status, data);
     if (status >= 400 && status < 500) return result(TokenOutcome.REQUEST_REJECTED, status, data);
@@ -134,18 +175,28 @@ const GenerateAccessToken = {
   /**
    * Requests a new access token for *baseUrl*.
    *
-   * Unchanged: the parsed body, whatever the status was, or `null` when there
-   * was no body to parse. A caller that needs to tell a rejected credential
-   * from a failing service wants {@link GenerateAccessToken.tokenResult}
-   * instead; this stays as it is so published consumers keep working.
+   * The payload-or-`null` contract, where payload means a token was actually
+   * minted: a 2xx carrying a non-empty `token` and `base_url`. Every other
+   * outcome answers `null`, including a 2xx whose body parsed into something
+   * with no usable token in it, and a 4xx whose body explains the refusal.
+   *
+   * This matches the Elixir SDK, which has always answered `null` for
+   * anything that was not a mint. Returning an error body here would hand a
+   * caller a truthy value for a request that produced no token — the same
+   * failure mode {@link GenerateAccessToken.tokenResult} exists to remove,
+   * reintroduced one layer down. A caller that needs the body of a failure,
+   * or needs to tell a rejected credential from a failing service, wants
+   * `tokenResult` instead: it carries both the outcome and the payload.
    *
    * @param {string} baseUrl sent verbatim. intake normalizes it and matches
    *   it against registered base URLs by longest path prefix.
    * @returns {Promise<object|null>} Object with `token`, `expired_at` and
-   *   `base_url`, or `null` on failure.
+   *   `base_url`, or `null` when no token was minted.
    */
   async token(baseUrl) {
-    return (await GenerateAccessToken.tokenResult(baseUrl)).payload;
+    const result = await GenerateAccessToken.tokenResult(baseUrl);
+
+    return result.outcome === TokenOutcome.SUCCESS ? result.payload : null;
   },
 };
 
