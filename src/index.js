@@ -32,6 +32,7 @@
 const { instance: config, LogMode } = require('./configuration');
 const { UnauthorizedError } = require('./unauthorized-error');
 const { VERSION } = require('./version');
+const { TokenOutcome } = require('./commands/generate-access-token');
 
 /**
  * Configure the EndPointBlank library.
@@ -70,6 +71,11 @@ module.exports = {
   VERSION,
   LogMode,
   UnauthorizedError,
+  // How a token request came back, for callers that branch on it. Surfaced
+  // here for the same reason LogMode is: it is a constant a consumer has to
+  // compare against, and making them reach into src/commands/ for it invites
+  // the retyped string literal it exists to prevent.
+  TokenOutcome,
   // Expose config singleton for direct access when needed
   config,
 };

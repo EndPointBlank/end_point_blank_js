@@ -3,6 +3,14 @@
 const REFRESH_BUFFER_MS = 2 * 60 * 1000; // 2 minutes
 const MIN_TTL_MS = 30 * 1000; // 30 seconds
 
+// Ceiling on remembered failures. The record is keyed on the URL the caller
+// asked for, which is a resource URL rather than an environment -- a service
+// walking /orders/1, /orders/2, /orders/3 against a dead intake would
+// otherwise accumulate one record per resource, forever, exactly the leak the
+// token cache avoids by keying on the base URL intake resolves to. Insertion
+// order is Map order, so the oldest record goes when the ceiling is reached.
+const MAX_FAILURES = 64;
+
 /**
  * Singleton holding this process's access tokens, one per application
  * environment.
@@ -33,6 +41,8 @@ class AccessTokens {
     this._entries = new Map();
     /** @type {Map<string, Promise<string|null>>} */
     this._inflight = new Map();
+    /** @type {Map<string, {outcome: string, status: number|null}>} */
+    this._failures = new Map();
   }
 
   /**
@@ -69,7 +79,7 @@ class AccessTokens {
   }
 
   async _fetch(baseUrl) {
-    const { GenerateAccessToken } = require('../commands/generate-access-token');
+    const { GenerateAccessToken, TokenOutcome } = require('../commands/generate-access-token');
 
     // Captured once, before the mint, and reused by both outcomes below.
     // _inflight coalesces only by the caller's URL, not by environment (see
@@ -82,7 +92,8 @@ class AccessTokens {
     // this URL too -- and a failure here would delete that good entry for a
     // problem that was never its own.
     const matchedKey = this._matchKey(baseUrl);
-    const payload = await GenerateAccessToken.token(baseUrl);
+    const result = await GenerateAccessToken.tokenResult(baseUrl);
+    const payload = result.payload;
 
     // The key is what intake resolved to, and only that. There is no
     // fallback to the requested URL: that would key on the resource the
@@ -109,6 +120,9 @@ class AccessTokens {
         token: payload.token,
         expiredAt: parseExpiry(payload.expired_at),
       });
+      // Whatever went wrong before is over; a stale record would have a
+      // caller acting on an outage that has already ended.
+      this._failures.delete(baseUrl);
       return payload.token;
     }
 
@@ -123,10 +137,62 @@ class AccessTokens {
       this._entries.delete(matchedKey);
     }
 
+    // A 2xx that carried no usable token is the server misbehaving -- intake's
+    // base_url is NOT NULL, so a 201 without one cannot be anything the
+    // caller did -- which puts it with the retriable failures rather than
+    // with the rejections.
+    const outcome =
+      result.outcome === TokenOutcome.SUCCESS ? TokenOutcome.SERVER_ERROR : result.outcome;
+    this._recordFailure(baseUrl, outcome, result.status);
+
+    if (outcome === TokenOutcome.CREDENTIAL_REJECTED) {
+      // Deliberately not the generic line below. This one will not fix
+      // itself: every subsequent request mints, gets another 401, and hands
+      // the caller a Basic fallback it never asked for, until somebody reads
+      // this and acts on it.
+      console.error(
+        `[EndPointBlank] Access token request for ${baseUrl} was REJECTED (HTTP 401): ` +
+          'the client credential is invalid or revoked. Retrying cannot help -- ' +
+          're-issue the credential and update this application\'s configuration.',
+      );
+      return null;
+    }
+
     console.error(
-      `[EndPointBlank] Failed to generate access token for ${baseUrl}: ${failureReason(payload)}`,
+      `[EndPointBlank] Failed to generate access token for ${baseUrl}: ${failureReason(result)}`,
     );
     return null;
+  }
+
+  /**
+   * Remembers why the most recent mint for *baseUrl* produced no token.
+   *
+   * @param {string} baseUrl
+   * @param {string} outcome
+   * @param {number|null} status
+   */
+  _recordFailure(baseUrl, outcome, status) {
+    // Re-inserting moves the key to the end of the Map's order, so a URL that
+    // keeps failing is not evicted as though it were the oldest.
+    this._failures.delete(baseUrl);
+    if (this._failures.size >= MAX_FAILURES) {
+      this._failures.delete(this._failures.keys().next().value);
+    }
+    this._failures.set(baseUrl, Object.freeze({ outcome, status: status != null ? status : null }));
+  }
+
+  /**
+   * Why the last attempt to mint a token for *baseUrl* failed, or `null`.
+   *
+   * @param {string} baseUrl the URL that was asked for -- the same argument
+   *   {@link AccessTokens#token} was called with, not the base URL intake
+   *   resolves it to. A failed mint never learns the canonical base URL,
+   *   so there is nothing else it could be keyed on.
+   * @returns {{outcome: string, status: number|null}|null}
+   */
+  lastFailure(baseUrl) {
+    const record = this._failures.get(baseUrl);
+    return record !== undefined ? record : null;
   }
 
   /**
@@ -166,10 +232,11 @@ class AccessTokens {
   }
 
   /**
-   * Discards every held token.
+   * Discards every held token, and every remembered failure.
    */
   clear() {
     this._entries.clear();
+    this._failures.clear();
   }
 
   /**
@@ -213,9 +280,26 @@ function usable(entry) {
 }
 
 /** Why a mint produced no usable token, for the log. */
-function failureReason(payload) {
+function failureReason(result) {
+  // Required here rather than at module load for the same reason _fetch does
+  // it: the command module reaches back into this one through Authorization.
+  const { TokenOutcome } = require('../commands/generate-access-token');
+  const payload = result.payload;
+  const stated = payload && payload.error;
+
+  // A transport error is by definition one with no status to report.
+  if (result.status == null) return 'no response';
+
+  if (result.outcome !== TokenOutcome.SUCCESS) {
+    if (stated) return `HTTP ${result.status}: ${stated}`;
+    // Classified on the status, so a body that would not parse costs only the
+    // payload -- say which of the two happened.
+    return payload === null ? `HTTP ${result.status} (unreadable body)` : `HTTP ${result.status}`;
+  }
+
+  // A 2xx: the status said yes, so what is missing is in the body.
   if (!payload) return 'no response';
-  if (payload.error) return payload.error;
+  if (stated) return stated;
   if (payload.token) {
     // Distinct from a rejected request: intake's base_url is NOT NULL, and it
     // answers 422 rather than minting when the caller's URL resolves to no
@@ -242,6 +326,7 @@ module.exports = {
     token: (baseUrl) => instance.token(baseUrl),
     exists: (baseUrl) => instance.exists(baseUrl),
     invalidate: (staleToken) => instance.invalidate(staleToken),
+    lastFailure: (baseUrl) => instance.lastFailure(baseUrl),
     clear: () => instance.clear(),
     _instance: instance,
   },

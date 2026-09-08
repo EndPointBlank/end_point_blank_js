@@ -5,6 +5,7 @@ jest.mock('../../src/commands/_http', () => ({ post: jest.fn() }));
 const { post } = require('../../src/commands/_http');
 const { instance: config } = require('../../src/configuration');
 const { AccessTokens } = require('../../src/tokens/access-tokens');
+const { TokenOutcome } = require('../../src/commands/generate-access-token');
 
 /**
  * Only the network is faked; `GenerateAccessToken` runs for real underneath,
@@ -32,6 +33,13 @@ const tokenPayload = (token = 'tok-1', { expiresInSeconds = 3600, baseUrl = BASE
 const tokenResponse = body => ({
   status: 201,
   ok: true,
+  json: async () => body,
+});
+
+/** A non-2xx answer from intake, with the status it actually uses. */
+const errorResponse = (status, body = {}) => ({
+  status,
+  ok: false,
   json: async () => body,
 });
 
@@ -575,6 +583,255 @@ describe('AccessTokens', () => {
 
       await expect(AccessTokens.token(narrow + '/1')).resolves.toBe('fresh');
       expect(post).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('telling a rejected credential apart from a failing service', () => {
+    // intake answers 401 for a credential it will not accept, and something
+    // else for everything it might accept later. A caller that cannot see the
+    // difference either retries a request that can never succeed or gives up
+    // on one that would have.
+
+    test('says the credential was rejected, in its own line, not the generic failure one', async () => {
+      post.mockResolvedValue(errorResponse(401, { error: 'invalid credentials' }));
+
+      await expect(AccessTokens.token(BASE)).resolves.toBeNull();
+
+      const logged = console.error.mock.calls.map(args => args.join(' ')).join('\n');
+      expect(logged).toMatch(/rejected/i);
+      expect(logged).toMatch(/re-issue/i);
+      expect(logged).not.toContain('Failed to generate access token');
+    });
+
+    test('records the rejection so a caller can ask why it got null', async () => {
+      post.mockResolvedValue(errorResponse(401, { error: 'invalid credentials' }));
+
+      await AccessTokens.token(BASE);
+
+      expect(AccessTokens.lastFailure(BASE)).toEqual({
+        outcome: TokenOutcome.CREDENTIAL_REJECTED,
+        status: 401,
+      });
+    });
+
+    test('still evicts the entry it could not refresh, exactly as any other failure does', async () => {
+      // A rejected credential is the one case where the held token is
+      // certainly dead, so the eviction that protects every other failure
+      // must not be skipped for it.
+      post.mockResolvedValueOnce(tokenResponse(tokenPayload('nearly-dead', { expiresInSeconds: 60 })));
+      await AccessTokens.token(BASE);
+
+      post.mockResolvedValue(errorResponse(401, { error: 'revoked' }));
+
+      await expect(AccessTokens.token(BASE)).resolves.toBeNull();
+      expect(AccessTokens.exists(BASE)).toBe(false);
+    });
+
+    test('still coalesces a burst behind one exchange', async () => {
+      // Ten callers hitting a revoked credential must produce one 401, not
+      // ten: the branch on the outcome runs after the coalescing, not
+      // instead of it.
+      let release;
+      const pending = new Promise(resolve => {
+        release = resolve;
+      });
+      post.mockImplementation(() => pending);
+
+      const callers = Promise.all(Array.from({ length: 10 }, () => AccessTokens.token(BASE)));
+      release(errorResponse(401, { error: 'invalid credentials' }));
+
+      await expect(callers).resolves.toEqual(Array(10).fill(null));
+      expect(post).toHaveBeenCalledTimes(1);
+    });
+
+    test.each([
+      ['a malformed request', 400, TokenOutcome.REQUEST_REJECTED],
+      ['an unregistered target application', 422, TokenOutcome.REQUEST_REJECTED],
+      ['a failing service', 500, TokenOutcome.SERVER_ERROR],
+      ['a bad gateway', 502, TokenOutcome.SERVER_ERROR],
+    ])('records %s as %i, distinctly from a rejected credential', async (_label, status, outcome) => {
+      post.mockResolvedValue(errorResponse(status, { error: 'nope' }));
+
+      await expect(AccessTokens.token(BASE)).resolves.toBeNull();
+
+      expect(AccessTokens.lastFailure(BASE)).toEqual({ outcome, status });
+      // The loud credential line belongs to 401 alone.
+      const logged = console.error.mock.calls.map(args => args.join(' ')).join('\n');
+      expect(logged).toContain('Failed to generate access token');
+    });
+
+    test('records an unreachable service as a transport failure with no status', async () => {
+      post.mockResolvedValue(null);
+
+      await AccessTokens.token(BASE);
+
+      expect(AccessTokens.lastFailure(BASE)).toEqual({
+        outcome: TokenOutcome.TRANSPORT_ERROR,
+        status: null,
+      });
+    });
+
+    test('a 401 an unreadable body still reads as a rejected credential', async () => {
+      // The SDK reaches intake through Caddy; a proxy, WAF or auth gateway in
+      // front of the app can answer 401 with an HTML page intake never
+      // generated. The credential is genuinely being refused, so this must
+      // not land in the retry-me bucket just because the body was not JSON.
+      post.mockResolvedValue({
+        status: 401,
+        ok: false,
+        json: async () => {
+          throw new SyntaxError('Unexpected token < in JSON');
+        },
+      });
+
+      await expect(AccessTokens.token(BASE)).resolves.toBeNull();
+
+      expect(AccessTokens.lastFailure(BASE)).toEqual({
+        outcome: TokenOutcome.CREDENTIAL_REJECTED,
+        status: 401,
+      });
+      const logged = console.error.mock.calls.map(args => args.join(' ')).join('\n');
+      expect(logged).toMatch(/rejected/i);
+    });
+
+    test('records a body it could not read under the status that came with it', async () => {
+      post.mockResolvedValue({
+        status: 502,
+        ok: false,
+        json: async () => {
+          throw new SyntaxError('Unexpected token < in JSON');
+        },
+      });
+
+      await expect(AccessTokens.token(BASE)).resolves.toBeNull();
+
+      expect(AccessTokens.lastFailure(BASE)).toEqual({
+        outcome: TokenOutcome.SERVER_ERROR,
+        status: 502,
+      });
+      expect(console.error).toHaveBeenCalledWith(
+        expect.stringContaining('HTTP 502 (unreadable body)'),
+      );
+    });
+
+    test('logs the bare status when the refusal came with no reason of its own', async () => {
+      post.mockResolvedValue(errorResponse(503));
+
+      await AccessTokens.token(BASE);
+
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('HTTP 503'));
+    });
+
+    test('survives a 2xx whose body is a bare null', async () => {
+      // `json()` resolving to literal null is still a parsed body, so it
+      // reaches the code that reads a token out of it. Reading through it
+      // would throw inside the caller's own request.
+      post.mockResolvedValue(tokenResponse(null));
+
+      await expect(AccessTokens.token(BASE)).resolves.toBeNull();
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('no response'));
+    });
+
+    test('records a 2xx whose body carries no usable token as a broken server', async () => {
+      // intake's base_url is NOT NULL, so a 201 without one is the server
+      // misbehaving rather than anything the caller can fix -- which puts it
+      // with the retriable failures, not with the rejections.
+      post.mockResolvedValue(tokenResponse({ token: 'tok-1' }));
+
+      await AccessTokens.token(BASE);
+
+      expect(AccessTokens.lastFailure(BASE)).toEqual({
+        outcome: TokenOutcome.SERVER_ERROR,
+        status: 201,
+      });
+    });
+  });
+
+  describe('lastFailure', () => {
+    test('is null before anything has been attempted', () => {
+      expect(AccessTokens.lastFailure(BASE)).toBeNull();
+    });
+
+    test('is null after a token was minted', async () => {
+      post.mockResolvedValue(tokenResponse(tokenPayload('tok-1')));
+
+      await AccessTokens.token(BASE);
+
+      expect(AccessTokens.lastFailure(BASE)).toBeNull();
+    });
+
+    test('is cleared by a later success, so it never reports a resolved outage', async () => {
+      post.mockResolvedValueOnce(errorResponse(503, { error: 'down' }));
+      await AccessTokens.token(BASE);
+      expect(AccessTokens.lastFailure(BASE)).not.toBeNull();
+
+      post.mockResolvedValueOnce(tokenResponse(tokenPayload('tok-1')));
+      await AccessTokens.token(BASE);
+
+      expect(AccessTokens.lastFailure(BASE)).toBeNull();
+    });
+
+    test('answers for the URL that was asked for, not for every URL', async () => {
+      const other = 'https://other.example.com';
+      post.mockImplementation(async (_url, _auth, body) =>
+        body.base_url === BASE ? errorResponse(401, { error: 'nope' }) : errorResponse(500, {}),
+      );
+
+      await AccessTokens.token(BASE);
+      await AccessTokens.token(other);
+
+      expect(AccessTokens.lastFailure(BASE)).toEqual({
+        outcome: TokenOutcome.CREDENTIAL_REJECTED,
+        status: 401,
+      });
+      expect(AccessTokens.lastFailure(other)).toEqual({
+        outcome: TokenOutcome.SERVER_ERROR,
+        status: 500,
+      });
+      expect(AccessTokens.lastFailure('https://never-asked.example.com')).toBeNull();
+    });
+
+    test('keeps the most recent failure for a URL, not the first', async () => {
+      post.mockResolvedValueOnce(errorResponse(500, {}));
+      await AccessTokens.token(BASE);
+
+      post.mockResolvedValueOnce(errorResponse(401, {}));
+      await AccessTokens.token(BASE);
+
+      expect(AccessTokens.lastFailure(BASE)).toEqual({
+        outcome: TokenOutcome.CREDENTIAL_REJECTED,
+        status: 401,
+      });
+    });
+
+    test('does not grow without bound when every URL a service walks fails', async () => {
+      // A service walking /orders/1, /orders/2, ... against a dead intake
+      // must not accumulate one record per resource URL forever; the same
+      // unbounded-growth trap the token cache avoids by keying on the
+      // environment. The newest records survive, the oldest are dropped.
+      post.mockResolvedValue(errorResponse(500, {}));
+
+      for (let i = 0; i < 200; i++) {
+        await AccessTokens.token(`https://example.com/orders/${i}`);
+      }
+
+      expect(AccessTokens.lastFailure('https://example.com/orders/199')).not.toBeNull();
+      expect(AccessTokens.lastFailure('https://example.com/orders/0')).toBeNull();
+    });
+
+    test('is forgotten by clear(), along with the tokens', async () => {
+      post.mockResolvedValue(errorResponse(500, {}));
+      await AccessTokens.token(BASE);
+
+      AccessTokens.clear();
+
+      expect(AccessTokens.lastFailure(BASE)).toBeNull();
+    });
+
+    test('is null for a nil, undefined or empty URL rather than throwing', () => {
+      expect(AccessTokens.lastFailure(null)).toBeNull();
+      expect(AccessTokens.lastFailure(undefined)).toBeNull();
+      expect(AccessTokens.lastFailure('')).toBeNull();
     });
   });
 

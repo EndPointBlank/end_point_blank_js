@@ -46,7 +46,7 @@ app.use(reportInteractionErrorHandler); // must be registered after your routes
 ```
 
 > **Note on requiring submodules:** the package's `main` entry (`src/index.js`) exports the
-> top-level `configure`/`VERSION`/`LogMode`/`UnauthorizedError`/`config` API. The Express
+> top-level `configure`/`VERSION`/`LogMode`/`TokenOutcome`/`UnauthorizedError`/`config` API. The Express
 > integration is available as a whole via `require('end-point-blank-js/express')` and the
 > reporting middleware via `require('end-point-blank-js/middleware')` (see the `exports` map in
 > `package.json`). Everything else (individual writers, commands, etc.) can still be required by
@@ -219,6 +219,53 @@ Tokens are cached per application environment, keyed on the canonical base URL i
 request to (not on the URL you passed), so a service that calls several targets holds a token for
 each. Calling `Authorization.header()` with no argument — as the route guards above do — always
 returns the Basic form.
+
+#### Why a token could not be obtained
+
+`Authorization.header(baseUrl)` falls back to Basic when no token can be minted, and
+`AccessTokens.token(baseUrl)` answers `null`. Neither says *why*, and the difference matters: a
+`401` from intake means the client credential is invalid or revoked and no amount of retrying will
+change that, while a `5xx` or a dropped connection is worth trying again. A `400` or `422` is
+permanent too, but the fix is the request or the target's registration rather than the credential.
+
+Two additive entry points expose that. Both are optional — the existing return contracts are
+unchanged.
+
+```js
+const epb = require('end-point-blank-js');
+const { AccessTokens } = require('end-point-blank-js/src/tokens/access-tokens');
+
+const token = await AccessTokens.token('https://api.example.com/orders');
+if (!token) {
+  const failure = AccessTokens.lastFailure('https://api.example.com/orders');
+  // => null, or { outcome, status }
+  if (failure && failure.outcome === epb.TokenOutcome.CREDENTIAL_REJECTED) {
+    // Permanent: re-issue the credential. Retrying only produces another 401.
+  }
+}
+```
+
+`lastFailure(baseUrl)` is keyed on the URL you asked for (a failed mint never learns the canonical
+base URL), holds only the most recent failure for it, and is cleared by the next successful mint.
+
+For the raw exchange, `GenerateAccessToken.tokenResult(baseUrl)` returns
+`{ outcome, status, payload }` rather than the payload alone:
+
+| `outcome` | HTTP | Meaning |
+| --- | --- | --- |
+| `TokenOutcome.SUCCESS` | 2xx | A payload came back. |
+| `TokenOutcome.CREDENTIAL_REJECTED` | 401 | Invalid or revoked credential. Permanent — re-issue it. |
+| `TokenOutcome.REQUEST_REJECTED` | other 4xx | Bad request (400) or no matching application (422). Permanent — fix the request or the registration. |
+| `TokenOutcome.SERVER_ERROR` | 5xx | Intake failed. Transient. |
+| `TokenOutcome.TRANSPORT_ERROR` | — | No HTTP status was obtained at all: timeout, connection refused, retries exhausted. Transient. |
+
+The status decides the outcome, and a body that will not parse never overrides it — a proxy in
+front of intake can answer `401` with an HTML page, and that credential is being refused just as
+surely as one refused in JSON. The sole exception is a `2xx` the SDK cannot read, which is reported
+as `SERVER_ERROR`.
+
+`status` carries the numeric status (or `null` when the request never landed) so you can be more
+precise than the outcome name when you need to be.
 
 ### Declaring endpoint versions &amp; registering routes
 
