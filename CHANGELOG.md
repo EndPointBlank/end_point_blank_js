@@ -11,16 +11,25 @@
 
   `GenerateAccessToken.tokenResult(baseUrl)` returns
   `{ outcome, status, payload }`, where `outcome` is one of
-  `TokenOutcome.SUCCESS` (2xx), `CREDENTIAL_REJECTED` (401 — permanent until
-  the credential is re-issued), `REQUEST_REJECTED` (any other 4xx — permanent,
-  but the remedy is the request or the target's registration),
-  `SERVER_ERROR` (5xx) or `TRANSPORT_ERROR` (no HTTP status was obtained at
-  all: timeout, connection refused, retries exhausted). `TokenOutcome` is
-  exported from the package root alongside `LogMode`.
+  `TokenOutcome.SUCCESS` (a token was minted), `CREDENTIAL_REJECTED` (401 —
+  permanent until the credential is re-issued), `REQUEST_REJECTED` (any other
+  4xx — permanent, but the remedy is the request or the target's
+  registration), `SERVER_ERROR` (5xx, or a 2xx that minted nothing) or
+  `TRANSPORT_ERROR` (no HTTP status was obtained at all: timeout, connection
+  refused, retries exhausted). `TokenOutcome` is exported from the package
+  root alongside `LogMode`.
+
+  `SUCCESS` means a token was minted, and nothing weaker: a 2xx whose body
+  parsed and carries a non-empty `token` and a non-empty `base_url`. So
+  `outcome === TokenOutcome.SUCCESS` is safe to branch on by itself — if it
+  could be true with the token absent, every caller would have to re-check the
+  payload by hand, and that is the check that gets forgotten.
 
   The status decides; a body that will not parse never overrides it, since a
-  proxy in front of intake can answer `401` with an HTML page. The one
-  exception is a `2xx` the SDK cannot read, reported as `SERVER_ERROR`.
+  proxy in front of intake can answer `401` with an HTML page. Only on a 2xx
+  does the body get a say: one the SDK cannot read a token out of is reported
+  as `SERVER_ERROR` under its real 2xx status. `payload` still carries whatever
+  body came back, so `GenerateAccessToken.token(baseUrl)` returns it unchanged.
 
 - **`AccessTokens.lastFailure(baseUrl)`** returns `null` or
   `{ outcome, status }` for the most recent failed mint for that URL, cleared

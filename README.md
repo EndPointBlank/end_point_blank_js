@@ -253,16 +253,22 @@ For the raw exchange, `GenerateAccessToken.tokenResult(baseUrl)` returns
 
 | `outcome` | HTTP | Meaning |
 | --- | --- | --- |
-| `TokenOutcome.SUCCESS` | 2xx | A payload came back. |
+| `TokenOutcome.SUCCESS` | 2xx | A token was minted: the body parsed and carries a non-empty `token` and `base_url`. Nothing else is a success. |
 | `TokenOutcome.CREDENTIAL_REJECTED` | 401 | Invalid or revoked credential. Permanent — re-issue it. |
 | `TokenOutcome.REQUEST_REJECTED` | other 4xx | Bad request (400) or no matching application (422). Permanent — fix the request or the registration. |
-| `TokenOutcome.SERVER_ERROR` | 5xx | Intake failed. Transient. |
+| `TokenOutcome.SERVER_ERROR` | 5xx, or an unusable 2xx | Intake failed, or answered a 2xx no token could be read out of. Transient. Keeps the real status, including when that was a 2xx. |
 | `TokenOutcome.TRANSPORT_ERROR` | — | No HTTP status was obtained at all: timeout, connection refused, retries exhausted. Transient. |
 
 The status decides the outcome, and a body that will not parse never overrides it — a proxy in
 front of intake can answer `401` with an HTML page, and that credential is being refused just as
-surely as one refused in JSON. The sole exception is a `2xx` the SDK cannot read, which is reported
-as `SERVER_ERROR`.
+surely as one refused in JSON. Only on a `2xx` does the body get a say, and only because there is
+nothing else to go on: the status said yes, so a body the SDK cannot read a token out of — it would
+not parse, it carries no `token`, or it carries a `token` and no `base_url` — is a broken server,
+reported as `SERVER_ERROR` under its real `2xx` status.
+
+So `outcome === TokenOutcome.SUCCESS` is safe to branch on by itself; you never have to re-check
+`payload.token` by hand. `payload` still carries whatever body came back, including on a `2xx`
+classified `SERVER_ERROR`, and `GenerateAccessToken.token(baseUrl)` returns it unchanged.
 
 `status` carries the numeric status (or `null` when the request never landed) so you can be more
 precise than the outcome name when you need to be.

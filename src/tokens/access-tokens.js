@@ -93,17 +93,23 @@ class AccessTokens {
     // problem that was never its own.
     const matchedKey = this._matchKey(baseUrl);
     const result = await GenerateAccessToken.tokenResult(baseUrl);
-    const payload = result.payload;
 
-    // The key is what intake resolved to, and only that. There is no
-    // fallback to the requested URL: that would key on the resource the
-    // caller happened to ask about, so a service walking /orders/1,
-    // /orders/2, /orders/3 would mint and store a token per resource, and
-    // nothing here evicts. Without a base URL the right application cannot
-    // be found, so no token is handed back either.
-    const key = payload && payload.base_url;
+    // SUCCESS is the whole test, because SUCCESS already means a token was
+    // minted: a 2xx whose body parsed and carried a non-empty `token` and
+    // `base_url`. There is deliberately no second, hand-written reading of
+    // the payload here to disagree with the classification -- that decision
+    // lives once, next to the status it depends on, so the two layers cannot
+    // drift apart when one of them is edited.
+    if (result.outcome === TokenOutcome.SUCCESS) {
+      const payload = result.payload;
 
-    if (payload && payload.token && key) {
+      // The key is what intake resolved to, and only that. There is no
+      // fallback to the requested URL: that would key on the resource the
+      // caller happened to ask about, so a service walking /orders/1,
+      // /orders/2, /orders/3 would mint and store a token per resource, and
+      // nothing here evicts.
+      const key = payload.base_url;
+
       // The key intake returned can differ from the one this URL matched
       // before the mint (a portal edit can shorten or lengthen an
       // environment's registered base URL). Without removing the old entry
@@ -137,15 +143,14 @@ class AccessTokens {
       this._entries.delete(matchedKey);
     }
 
-    // A 2xx that carried no usable token is the server misbehaving -- intake's
-    // base_url is NOT NULL, so a 201 without one cannot be anything the
-    // caller did -- which puts it with the retriable failures rather than
-    // with the rejections.
-    const outcome =
-      result.outcome === TokenOutcome.SUCCESS ? TokenOutcome.SERVER_ERROR : result.outcome;
-    this._recordFailure(baseUrl, outcome, result.status);
+    // Recorded exactly as it was classified. A 2xx that carried no usable
+    // token already arrives here as SERVER_ERROR -- intake's base_url is NOT
+    // NULL, so a 201 without one cannot be anything the caller did, which
+    // puts it with the retriable failures rather than with the rejections --
+    // so there is nothing left for this layer to re-decide.
+    this._recordFailure(baseUrl, result.outcome, result.status);
 
-    if (outcome === TokenOutcome.CREDENTIAL_REJECTED) {
+    if (result.outcome === TokenOutcome.CREDENTIAL_REJECTED) {
       // Deliberately not the generic line below. This one will not fix
       // itself: every subsequent request mints, gets another 401, and hands
       // the caller a Basic fallback it never asked for, until somebody reads
@@ -279,34 +284,65 @@ function usable(entry) {
   return Boolean(entry && entry.expiredAt > new Date(Date.now() + REFRESH_BUFFER_MS));
 }
 
-/** Why a mint produced no usable token, for the log. */
+/**
+ * Why a mint produced no usable token, for the log.
+ *
+ * Only ever called on a failure — the success branch of `_fetch` has already
+ * returned — so it reports on the status, and never has to ask what the
+ * outcome was.
+ */
 function failureReason(result) {
-  // Required here rather than at module load for the same reason _fetch does
-  // it: the command module reaches back into this one through Authorization.
-  const { TokenOutcome } = require('../commands/generate-access-token');
-  const payload = result.payload;
-  const stated = payload && payload.error;
-
   // A transport error is by definition one with no status to report.
   if (result.status == null) return 'no response';
 
-  if (result.outcome !== TokenOutcome.SUCCESS) {
-    if (stated) return `HTTP ${result.status}: ${stated}`;
-    // Classified on the status, so a body that would not parse costs only the
-    // payload -- say which of the two happened.
-    return payload === null ? `HTTP ${result.status} (unreadable body)` : `HTTP ${result.status}`;
+  const payload = result.payload;
+
+  // A 2xx only reaches here as a broken server: the status said yes and no
+  // token could be read out of what came with it. It is reported under the
+  // real status it arrived with -- calling a 201 "no response" would send
+  // whoever reads this line hunting a network fault that never happened --
+  // and says which part of the body was the problem.
+  if (result.status >= 200 && result.status < 300) {
+    return `HTTP ${result.status} (${bodyProblem(payload)})`;
   }
 
-  // A 2xx: the status said yes, so what is missing is in the body.
-  if (!payload) return 'no response';
-  if (stated) return stated;
-  if (payload.token) {
-    // Distinct from a rejected request: intake's base_url is NOT NULL, and it
-    // answers 422 rather than minting when the caller's URL resolves to no
-    // environment. A 201 without one is a broken server.
-    return 'response carried a token but no base_url';
+  const stated = statedError(payload);
+  if (stated) return `HTTP ${result.status}: ${stated}`;
+  // Classified on the status, so a body that would not parse costs only the
+  // payload -- say which of the two happened.
+  return payload === null ? `HTTP ${result.status} (unreadable body)` : `HTTP ${result.status}`;
+}
+
+/** What was wrong with the body of a 2xx that minted nothing. */
+function bodyProblem(payload) {
+  // Nothing to read a token out of at all: a body that would not parse (the
+  // payload is null, and the parse error was logged where it happened), a
+  // bare `null`, or a body that is not a JSON object -- `response.json()`
+  // resolves happily to a string, a number or an array.
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+    return 'no usable body';
   }
-  return 'no token in response';
+
+  if (!(typeof payload.token === 'string' && payload.token !== '')) {
+    return statedError(payload) || 'no token in response';
+  }
+
+  // Distinct from a rejected request: intake's base_url is NOT NULL, and it
+  // answers 422 rather than minting when the caller's URL resolves to no
+  // environment. A 201 without one is a broken server, and there is nothing
+  // to cache the token under.
+  return 'response carried a token but no base_url';
+}
+
+/** intake's own reason for the failure, when it sent one worth printing. */
+function statedError(payload) {
+  if (payload === null || typeof payload !== 'object') return null;
+
+  // A misbehaving intake sending a nested object or a number where a string
+  // belongs must not turn this log line into "[object Object]"; fall through
+  // to the generic reason instead.
+  const stated = payload.error;
+  return typeof stated === 'string' && stated !== '' ? stated : null;
 }
 
 function parseExpiry(value) {

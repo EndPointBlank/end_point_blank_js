@@ -123,6 +123,16 @@ describe('GenerateAccessToken.token', () => {
     await expect(GenerateAccessToken.token(BASE_URL)).resolves.toBeNull();
   });
 
+  test('hands back a 2xx body that carries no usable token, exactly as it always has', async () => {
+    // Such a response is classified as a broken server rather than a success
+    // now, but `token()` is the legacy payload-or-null contract and a
+    // classification must not change what it hands back. The parsed body
+    // rides along on the result precisely so this stays true.
+    post.mockResolvedValue({ status: 201, ok: true, json: async () => ({ token: 'tok-1' }) });
+
+    await expect(GenerateAccessToken.token(BASE_URL)).resolves.toEqual({ token: 'tok-1' });
+  });
+
   test('returns null rather than throwing when the response is not JSON', async () => {
     // An HTML error page from a proxy must not take the caller's request down
     // with it — this runs inside the customer's request path.
@@ -273,6 +283,28 @@ describe('GenerateAccessToken.tokenResult', () => {
       outcome,
       status,
       payload: null,
+    });
+  });
+
+  test.each([
+    ['no token at all', {}],
+    ['an error where a token should be', { error: 'unknown application' }],
+    ['a token but no base_url', { token: 'tok-1' }],
+    ['an empty token', { token: '', base_url: BASE_URL }],
+    ['an empty base_url', { token: 'tok-1', base_url: '' }],
+  ])('reports a 2xx carrying %s as a broken server, not as a success', async (_label, body) => {
+    // SUCCESS has to mean a usable mint, or `outcome === SUCCESS` is not
+    // safe to branch on and every caller has to re-check the payload by
+    // hand -- an omitted re-check being exactly the silent failure this
+    // whole change removes. intake's base_url is NOT NULL and it answers 422
+    // rather than minting when the URL resolves to nothing, so a 2xx without
+    // one is a broken server, and it is reported with its real 2xx status.
+    post.mockResolvedValue(response(201, body));
+
+    await expect(GenerateAccessToken.tokenResult(BASE_URL)).resolves.toEqual({
+      outcome: TokenOutcome.SERVER_ERROR,
+      status: 201,
+      payload: body,
     });
   });
 

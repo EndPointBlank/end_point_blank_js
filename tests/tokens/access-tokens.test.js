@@ -729,7 +729,9 @@ describe('AccessTokens', () => {
       post.mockResolvedValue(tokenResponse(null));
 
       await expect(AccessTokens.token(BASE)).resolves.toBeNull();
-      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('no response'));
+      expect(console.error).toHaveBeenCalledWith(
+        expect.stringContaining('HTTP 201 (no usable body)'),
+      );
     });
 
     test('records a 2xx whose body carries no usable token as a broken server', async () => {
