@@ -161,6 +161,120 @@ describe('authenticated middleware', () => {
     });
   });
 
+  describe('the status the refusal carries', () => {
+    /**
+     * The authorize guard has always passed intake's status through; this one
+     * had it in scope at the branch and dropped it, so every refusal the
+     * README's own handler (`res.status(err.statusCode)`) rendered came out as
+     * a 401 — including the 403 that means "your credential is fine, you have
+     * no grant for this".
+     */
+    test('a denied grant arrives as 403, not 401', async () => {
+      post.mockResolvedValue({
+        status: 403,
+        text: async () => JSON.stringify({ error: 'access_denied' }),
+      });
+
+      const next = await run({ headers: {}, method: 'GET', path: '/students' });
+
+      expect(next.mock.calls[0][0].statusCode).toBe(403);
+    });
+
+    test('a rejected credential arrives as 401', async () => {
+      post.mockResolvedValue({
+        status: 401,
+        text: async () => JSON.stringify({ error: 'invalid_client' }),
+      });
+
+      const next = await run({ headers: {}, method: 'GET', path: '/students' });
+
+      expect(next.mock.calls[0][0].statusCode).toBe(401);
+    });
+
+    test('a failure inside intake arrives as its own 5xx', async () => {
+      // A 500 from intake is not a statement about this caller. Reporting it
+      // as 401 sends the integrator to re-issue a credential that is fine and
+      // hides an outage.
+      post.mockResolvedValue({ status: 500, text: async () => 'boom' });
+
+      const next = await run({ headers: {}, method: 'GET', path: '/students' });
+
+      expect(next.mock.calls[0][0].statusCode).toBe(500);
+    });
+
+    test('an unexpected success status is refused as that status', async () => {
+      post.mockResolvedValue({ status: 200, text: async () => '' });
+
+      const next = await run({ headers: {}, method: 'GET', path: '/students' });
+
+      expect(next.mock.calls[0][0].statusCode).toBe(200);
+    });
+
+    test('a body that is not JSON still keeps its status', async () => {
+      post.mockResolvedValue({ status: 502, text: async () => 'Bad Gateway' });
+
+      const next = await run({ headers: {}, method: 'GET', path: '/students' });
+
+      expect(next.mock.calls[0][0].statusCode).toBe(502);
+      expect(next.mock.calls[0][0].message).toContain('Bad Gateway');
+    });
+  });
+
+  describe('the reason the refusal gives', () => {
+    /**
+     * A `fetch` body can be consumed exactly once, and each `clone()` hands
+     * back an independent reader. The plain mocks elsewhere in this file are
+     * re-readable, so they cannot show the difference; this one behaves like
+     * the real thing.
+     */
+    const oneShotResponse = (status, body) => {
+      const reader = () => {
+        let consumed = false;
+        const self = {
+          status,
+          clone: () => reader(),
+          async text() {
+            if (consumed) throw new TypeError('Body has already been consumed.');
+            consumed = true;
+            return body;
+          },
+          async json() {
+            return JSON.parse(await self.text());
+          },
+        };
+        return self;
+      };
+      return reader();
+    };
+
+    test('is the one intake gave, not the generic outage message', async () => {
+      // `BasicAuthenticate` reads the body to log the failure. It used to read
+      // the response itself rather than a clone, draining the stream before
+      // the guard could read it — so every refusal reached the caller as
+      // "Authentication service unavailable", whatever intake had said.
+      // `EndpointAuthorize` was given this fix; this command was not.
+      post.mockResolvedValue(oneShotResponse(403, JSON.stringify({ error: 'access_denied' })));
+
+      const next = await run({ headers: {}, method: 'GET', path: '/students' });
+
+      expect(next.mock.calls[0][0].message).toBe('Authentication failed: access_denied');
+      expect(next.mock.calls[0][0].statusCode).toBe(403);
+    });
+  });
+
+  describe('when the service cannot be reached, the status', () => {
+    test('is 503, because no credential was ever judged', async () => {
+      // Nothing refused this caller. 401 blames a credential that was never
+      // looked at, and sends the integrator to fix the wrong thing. This is
+      // what `authorized` has always answered for the same case.
+      post.mockResolvedValue(null);
+
+      const next = await run({ headers: {}, method: 'GET', path: '/students' });
+
+      expect(next.mock.calls[0][0].statusCode).toBe(503);
+    });
+  });
+
   describe('when something unexpected goes wrong', () => {
     test('passes the original error on rather than disguising it as a refusal', async () => {
       // An UnauthorizedError is deliberately not logged. Mislabelling a real

@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.8.0
+
+### Fixed
+
+- **A refusal from the `authenticated` guard now says which refusal it was.**
+  `express/authenticated.js` read intake's status at the branch it refused on
+  and then threw it away, so every refusal reached the caller as a 401 — the
+  status `UnauthorizedError` falls back to — including the 403 that means
+  `access_denied`. `authorized` has always passed intake's status through, so
+  the same denial gave a caller two different answers depending on which guard
+  the route used.
+
+  401 and 403 send an integrator to two different places: *re-check the
+  credential* versus *ask for a grant covering this endpoint*. Collapsing them
+  sent half of them to debug the wrong thing.
+
+  | intake answered | `err.statusCode` | what it tells the integrator |
+  | --- | --- | --- |
+  | 401 | `401` | the credential was not accepted — re-check or re-issue it |
+  | 403 | `403` | the credential is fine; no grant covers this endpoint |
+  | any other non-201 | that status | intake's own verdict, verbatim |
+  | nothing at all | `503` | the check could not be made; nothing judged this caller |
+
+  The README's own suggested handler — `res.status(err.statusCode)` — was
+  written as though this already worked, and on the `authorized` path it did.
+  It now works on both.
+
+- **A refusal from the `authenticated` guard now says *why*, in intake's own
+  words.** `BasicAuthenticate` reads the failure body to log it, and it read
+  the response itself rather than a clone. A `fetch` body can be consumed once,
+  so the guard that reads it afterwards to build the error got nothing, and
+  every refusal arrived as "Authentication service unavailable" whatever intake
+  had actually said. `EndpointAuthorize` was given this fix and this command was
+  not — the same asymmetry, in the same pair of paths, that lost the status.
+
+  This is only visible against a real `fetch` response, which is why no test
+  caught it: the failure needs a body that can be read once, and a re-readable
+  double cannot express one.
+
+### Changed
+
+- **An unreachable intake is now a 503 to the caller, not a 401.** When intake
+  does not answer at all, nothing refused the caller and no credential was
+  judged, so blaming the credential sent integrators to re-issue one that was
+  fine. This is what `authorized` has always answered for the same case, and
+  what the other SDKs answer.
+- **An intake 5xx now reaches the caller as that 5xx**, where it previously
+  reached them as a 401. This changes what a client of an application using
+  `authenticated` sees: an outage in intake presents as an outage rather than as
+  a rejected credential. Callers that branch on `401` to trigger a re-login will
+  no longer do so for a fault that has nothing to do with their credential.
+- The two guards' refusal handling — which was two transcriptions of one
+  decision, and had already drifted twice — is now one function,
+  `unauthorized-error.refusalFrom`. Two copies is how one path acquires a fix
+  the other does not.
+
+### Unchanged
+
+- `new UnauthorizedError(message)` still means what it meant: the status
+  defaults to 401. The status remains the optional second argument, and the
+  class itself is otherwise untouched — it always accepted a status, which is
+  why nothing ever complained that `authenticated` was not passing one.
+- `authorized` behaves exactly as before. Its refusal path moved into the shared
+  function without changing what it produces for any input.
+
 ## 0.7.0
 
 ### Added
