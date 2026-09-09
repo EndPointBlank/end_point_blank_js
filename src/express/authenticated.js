@@ -2,14 +2,15 @@
 
 const { BasicAuthenticate } = require('../commands/basic-authenticate');
 const { VersionFinder } = require('../commands/version-finder');
-const { UnauthorizedError } = require('../unauthorized-error');
+const { refusalFrom } = require('../unauthorized-error');
 
 /**
  * Express route middleware that enforces EndPointBlank authentication before
  * the next handler is called.
  *
  * If the remote authentication service does not return HTTP 201 an
- * `UnauthorizedError` is passed to `next(err)`.
+ * `UnauthorizedError` is passed to `next(err)`, carrying that service's own
+ * status as `statusCode` — or 503 when it did not answer at all.
  *
  * Equivalent to the `before_action :authenticate!` set up by the Ruby gem's
  * `EndPointBlank::Rails::Authenticated` concern.
@@ -37,12 +38,7 @@ async function authenticated(req, res, next) {
     const response = await BasicAuthenticate.authenticate(req, path, version);
 
     if (!response || response.status !== 201) {
-      let message = 'Authentication service unavailable';
-      if (response) {
-        const body = await response.json().catch(() => ({}));
-        message = body.error || (await response.text().catch(() => message));
-      }
-      return next(new UnauthorizedError(`Authentication failed: ${message}`));
+      return next(await refusalFrom(response, 'Authentication'));
     }
 
     next();

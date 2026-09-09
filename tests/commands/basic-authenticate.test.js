@@ -35,6 +35,38 @@ describe('BasicAuthenticate.authenticate', () => {
     config._reset();
   });
 
+  describe('the response it hands back', () => {
+    /** A `fetch` body reads once; each `clone()` is an independent reader. */
+    const oneShotResponse = (status, body) => {
+      const reader = () => {
+        let consumed = false;
+        return {
+          status,
+          clone: () => reader(),
+          async text() {
+            if (consumed) throw new TypeError('Body has already been consumed.');
+            consumed = true;
+            return body;
+          },
+        };
+      };
+      return reader();
+    };
+
+    test('is still readable by the caller after a failure is logged', async () => {
+      // The failure log reads the body. Reading the response itself rather
+      // than a clone drains it, and `authenticated.js` — which builds the
+      // error the caller sees out of that same body — then gets nothing. That
+      // is why every refusal used to arrive as "Authentication service
+      // unavailable". `EndpointAuthorize` clones for exactly this reason.
+      post.mockResolvedValue(oneShotResponse(403, '{"error":"access_denied"}'));
+
+      const response = await BasicAuthenticate.authenticate(req(), '/students', '1');
+
+      await expect(response.text()).resolves.toBe('{"error":"access_denied"}');
+    });
+  });
+
   describe('the request it sends', () => {
     test('goes to the authorize endpoint', async () => {
       await BasicAuthenticate.authenticate(req(), '/students', '1');

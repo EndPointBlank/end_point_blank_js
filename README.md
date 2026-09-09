@@ -195,6 +195,18 @@ app.use((err, req, res, next) => {
 });
 ```
 
+`statusCode` is intake's own verdict, from either guard. 401 and 403 are different remedies, so
+they must not be collapsed:
+
+| intake answered | `err.statusCode` |
+| --- | --- |
+| 401 | `401` — re-check or re-issue the credential |
+| 403 | `403` — ask for a grant covering this endpoint |
+| any other non-201 | that status, verbatim |
+| nothing at all | `503` — the check could not be made, so nothing judged this caller |
+
+`new UnauthorizedError(message)` still defaults to 401; the status is an optional second argument.
+
 ### Authorization headers for your own outbound calls
 
 `Authorization.header(baseUrl)` — required by its real path under `src/`, same as any other

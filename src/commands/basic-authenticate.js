@@ -43,7 +43,18 @@ const BasicAuthenticate = {
 
     log.info(`[EndPointBlank] Authentication response: ${response.status}`);
     if (response.status > 299) {
-      const text = await response.text().catch(() => '');
+      // Clone before reading, exactly as `EndpointAuthorize` does. A fetch
+      // Response body can only be consumed once, and `authenticated.js` reads
+      // this one afterwards to build the error the caller sees. Draining it
+      // here meant every failure — access_denied, invalid_credentials — reached
+      // the caller as "Authentication service unavailable", which is both wrong
+      // and the least useful thing to page on.
+      //
+      // The authorize command was given this fix and this one was not, which is
+      // the same asymmetry that lost the status: two copies of one decision,
+      // one of them repaired.
+      const source = typeof response.clone === 'function' ? response.clone() : response;
+      const text = await source.text().catch(() => '');
       console.error(`[EndPointBlank] Authentication failed: ${response.status} - ${text}`);
     }
     return response;
