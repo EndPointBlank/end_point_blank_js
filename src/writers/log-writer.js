@@ -4,6 +4,7 @@ const { instance: config, LogMode } = require('../configuration');
 const { RequestStore } = require('../request-store');
 const { DirectWriter } = require('./direct-writer');
 const { DelayedWriter } = require('./delayed-writer');
+const { applyMasking } = require('../masking');
 
 /**
  * Sends structured log entries to the EndPointBlank API.
@@ -52,7 +53,14 @@ const LogWriter = {
         source_application_environment_id: RequestStore.getSourceApplicationEnvironmentId(),
         ...stamped,
       };
-      await _writer().write([payload]);
+      // Applied after `...stamped` is already folded in above, matching the
+      // merge-then-mask order `ExceptionWriter` and `PayloadBuilder.build`
+      // use for the same stamped fields (sc-382). `FIELD_MAP.log` is `{}`, so
+      // rule-based masking has nothing to target here yet, but `maskHook` is
+      // arbitrary caller code that runs regardless of `FIELD_MAP` — a log
+      // entry's free-form `data` blob is exactly what a hook exists to scrub.
+      const maskedPayload = applyMasking(payload, 'log', config.maskingRules, config.maskHook);
+      await _writer().write([maskedPayload]);
     } catch (err) {
       console.error('[EndPointBlank] LogWriter failed:', err.message);
     }

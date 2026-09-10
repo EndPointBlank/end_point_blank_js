@@ -168,4 +168,40 @@ describe('LogWriter', () => {
     await expect(LogWriter.info('hello')).resolves.toBeUndefined();
     expect(console.error).toHaveBeenCalled();
   });
+
+  describe('masking', () => {
+    // FIELD_MAP.log is {}, so no rule-based target exists on this stream yet.
+    // `maskHook` is not gated by FIELD_MAP at all — it is arbitrary caller
+    // code that is offered every payload regardless of record type, and a
+    // log entry's free-form `data` blob is exactly what it exists to scrub.
+    // This asserts on what was actually posted, the way
+    // `tests/writers/request-writer.test.js`'s masking block does.
+    test('runs the configured mask hook even though FIELD_MAP.log has no rule-based targets', async () => {
+      config.maskHook = (payload, recordType) => ({
+        ...payload,
+        data: { ...payload.data, scrubbed: true, seenRecordType: recordType },
+      });
+
+      await LogWriter.info('payment processed', { cardNumber: '4111111111111111' });
+
+      expect(sentPayload().data).toEqual({
+        cardNumber: '4111111111111111',
+        scrubbed: true,
+        seenRecordType: 'log',
+      });
+    });
+
+    test('the hook sees the stamped fields, since masking runs after they are merged', async () => {
+      const req = { path: '/v1/students', method: 'GET', headers: {} };
+      const seen = [];
+      config.maskHook = (payload, recordType) => {
+        seen.push({ stamped_path: payload.stamped_path, recordType });
+        return payload;
+      };
+
+      await RequestStore.run(req, () => LogWriter.info('hello'));
+
+      expect(seen).toEqual([{ stamped_path: '/v1/students', recordType: 'log' }]);
+    });
+  });
 });
