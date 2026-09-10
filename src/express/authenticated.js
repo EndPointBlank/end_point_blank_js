@@ -3,6 +3,7 @@
 const { BasicAuthenticate } = require('../commands/basic-authenticate');
 const { VersionFinder } = require('../commands/version-finder');
 const { refusalFrom } = require('../unauthorized-error');
+const { requestPath } = require('./request-path');
 
 /**
  * Express route middleware that enforces EndPointBlank authentication before
@@ -32,7 +33,7 @@ const { refusalFrom } = require('../unauthorized-error');
  */
 async function authenticated(req, res, next) {
   try {
-    const path = req.route?.path || req.path || req.url;
+    const path = requestPath(req);
     const version = VersionFinder.find(req);
 
     const response = await BasicAuthenticate.authenticate(req, path, version);

@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.11.0
+
+### Fixed
+
+- **A route on a mounted router authenticated as an endpoint that was never
+  registered.** `express/authenticated.js` worked the path out itself —
+  `req.route?.path || req.path || req.url` — with no `req.baseUrl` and no
+  trailing-slash normalization. Registration and `authorized` both go through
+  `express/request-path.js`, which exists because intake stores what
+  registration told it and matches it exactly (`Intake.PathNormalizer` only
+  rewrites `{var}` to `:var`; it does not touch mount points or trailing
+  slashes). So the guard asked about a path nothing had registered, and every
+  request through it was refused with `missing_target_endpoint` — while
+  registration and the authorize path, each looked at on its own, were correct.
+
+  | route | registered, and authorized, as | authenticated as |
+  | --- | --- | --- |
+  | router mounted at `/whoami`, `router.get('/')` | `/whoami` | `/` |
+  | router mounted at `/books`, `router.get('/:id')` | `/books/:id` | `/:id` |
+  | `app.get('/whoami')` | `/whoami` | `/whoami` |
+
+  Only the last shape was ever right, which is how this survived: a top-level
+  route has no `baseUrl` to drop, so the guard looked correct in exactly the
+  arrangement its tests and the quickstart used. Mounting the router — the
+  arrangement `app.use('/api', router)` makes ordinary — broke it, and the
+  symptom was a blanket refusal that pointed at the credential rather than at
+  the path.
+
+### Changed
+
+- The two guards' path resolution is now one function,
+  `express/request-path.requestPath`, which the endpoint registrar already used.
+  This was the last of the pair's three transcriptions: sc-307 unified the
+  refusal, sc-320 the body keys, and the path was the half left unrepaired both
+  times. Two copies is how one path acquires a fix the other does not.
+
+### Unchanged
+
+- `authorized`, the endpoint registrar, and `requestPath` itself behave exactly
+  as before. Nothing about what gets registered changed; the authenticate guard
+  was brought into line with it, not the other way around.
+- A top-level route reports the path it always reported. An application whose
+  routes are all declared on the app rather than on a mounted router sees no
+  difference.
+
 ## 0.10.0
 
 ### Fixed
