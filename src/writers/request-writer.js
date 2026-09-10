@@ -1,5 +1,6 @@
 'use strict';
 
+const { randomUUID } = require('crypto');
 const { instance: config, LogMode } = require('../configuration');
 const { RequestStore } = require('../request-store');
 const { VersionFinder } = require('../commands/version-finder');
@@ -26,7 +27,26 @@ const RequestWriter = {
       const rawPayload = {
         app_name: config.appName,
         env: config.environment,
-        uuid: RequestStore.getUuid() || headers['x-request-id'] || req.id || null,
+        // `uuid` is required on this stream too —
+        // `intake/lib/intake/interactions/application_request.ex:77-84`, where
+        // the comment above the list calls it "the correlation key" — so the
+        // `|| null` this used to end in did not produce an uncorrelated request
+        // row, it produced no request row at all. That changeset feeds
+        // `Intake.BulkInsert.insert_all/3`, where an invalid changeset is
+        // dropped rather than degraded, so the whole observation went. See
+        // sc-353.
+        //
+        // The two middle fallbacks stay, unlike the ones removed from
+        // `ExceptionWriter` and `ResponseWriter`: those two read `req` from
+        // `RequestStore.get()`, which is non-empty only inside
+        // `RequestStore.run` — and `run` always mints — so their chains were
+        // dead past the first term. Here `req` is this function's own argument.
+        // A caller can hand one over with no store context around it (the
+        // module is public API via `./src/*`), and then an inbound
+        // `X-Request-Id` is a better correlation key than a fresh id, because
+        // the caller's other services are already using it. The tests under
+        // "correlating the record" cover all four terms.
+        uuid: RequestStore.getUuid() || headers['x-request-id'] || req.id || randomUUID(),
         headers,
         path: req.path || req.url || null,
         http_method: req.method || null,

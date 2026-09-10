@@ -44,6 +44,9 @@ const LogWriter = {
         log_level: level,
         sent_at: new Date().toISOString(),
         app_name: config.appName,
+        // The caller's inbound id on purpose, not `RequestStore.getUuid()` like
+        // the other three writers. Nothing is refused here, so the rows land
+        // uncorrelated rather than going missing. See sc-380.
         uuid: req ? (req.headers && req.headers['x-request-id']) || req.id || null : null,
         data,
         source_application_environment_id: RequestStore.getSourceApplicationEnvironmentId(),
