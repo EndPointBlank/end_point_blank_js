@@ -188,6 +188,14 @@ Both guards post to the same endpoint and describe the call with the same keys �
 without it is refused with a 401, whatever credential it carries. EndPointBlank ignores any other
 key in the body, so a misspelled field does not fail — it is simply never received.
 
+`path` is the **route pattern, composed with the prefix the router is mounted under** — a router
+mounted at `/students` declaring `router.get('/:id')` is reported as `/students/:id`, and its index
+route as `/students` rather than `/students/`. That is the same string that
+[`registerExpressEndpoints`](#declaring-endpoint-versions--registering-routes) publishes for the
+route, and it has to be: EndPointBlank resolves the endpoint before it considers the credential,
+and matches the path exactly. A guard naming the route any other way is refused for having no such
+endpoint — which reads like a missing grant on a credential that is perfectly good.
+
 Handle `UnauthorizedError` explicitly (it is intentionally *not* reported as an application error —
 see [Request/response/error/log reporting](#requestresponseerrorlog-reporting)):
 

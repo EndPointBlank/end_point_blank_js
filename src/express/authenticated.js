@@ -3,6 +3,7 @@
 const { BasicAuthenticate } = require('../commands/basic-authenticate');
 const { VersionFinder } = require('../commands/version-finder');
 const { refusalFrom } = require('../unauthorized-error');
+const { requestPath } = require('./request-path');
 
 /**
  * Express route middleware that enforces EndPointBlank authentication before
@@ -32,7 +33,12 @@ const { refusalFrom } = require('../unauthorized-error');
  */
 async function authenticated(req, res, next) {
   try {
-    const path = req.route?.path || req.path || req.url;
+    // The same helper `authorized` and the endpoint registrar call. Composing
+    // this by hand is what the helper exists to prevent: intake resolves the
+    // endpoint before it judges the credential, and matches `path` with SQL
+    // `=`, so a path that differs from the registered one by a mount prefix or
+    // a trailing slash resolves to no row at all.
+    const path = requestPath(req);
     const version = VersionFinder.find(req);
 
     const response = await BasicAuthenticate.authenticate(req, path, version);

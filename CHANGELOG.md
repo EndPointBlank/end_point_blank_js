@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.10.0
+
+### Fixed
+
+- **The `authenticated` guard now names the endpoint the way it was
+  registered.** `express/authenticated.js` built its path by hand —
+  `req.route?.path || req.path || req.url` — where its sibling
+  `express/authorized.js`, in the next file, calls the shared `requestPath`
+  helper. Two things were missing from the hand-built version, and both are
+  live:
+
+  | route | authenticate sent | authorize sent, and registration published |
+  | --- | --- | --- |
+  | `router.get('/:id')`, router mounted at `/students` | `/:id` | `/students/:id` |
+  | `router.get('/')`, router mounted at `/students` | `/` | `/students` |
+  | `app.get('/widgets/:id')` | `/widgets/:id` | `/widgets/:id` |
+
+  It omitted `req.baseUrl`, so every route on a mounted router lost its prefix,
+  and it skipped `normalizePath`, so an index route kept a trailing slash the
+  registrar strips. The normal Express idiom — a router that declares paths
+  relative to a prefix it never sees — was affected on every route it carries.
+
+  EndPointBlank resolves the endpoint *before* it considers the credential, and
+  matches the path exactly. A path nothing was registered under resolves to no
+  endpoint, and the call is refused. **The symptom is misleading**: the refusal
+  is about a grant, so an integrator sees a permissions failure and goes to
+  check the credential they were issued — which is fine — and then the grant
+  they were given, which is also fine. Nothing they are shown points at the
+  path.
+
+  An integrator using `authenticated` on a mounted router sees routes that
+  refused every caller start serving their handlers. `authorized` is unchanged;
+  it has called the shared helper since that helper was written, which is why
+  one guard resolved endpoints correctly and the other never has.
+
+### Changed
+
+- Nothing in the public API. `authenticated` keeps its signature and its
+  behaviour on the shapes that already worked — a route declared on the app
+  itself (`app.get('/widgets/:id')`) has no prefix to lose and no trailing
+  slash to trim, so the path it reports is byte-for-byte what it was before.
+  Only routes on a mounted router change, and only from a path that resolved to
+  nothing into the one they were registered under.
+
+### Unchanged
+
+- `authorized`, `registerExpressEndpoints` and `request-path.js` are untouched.
+  This release brings the third caller into line with the helper the other two
+  already shared, rather than changing the path anything else reports.
+
 ## 0.9.0
 
 ### Fixed
