@@ -58,6 +58,7 @@ const EndpointAuthorize = {
       application: config.appName,
       endpoint_version: version,
       source_ip: remoteAddr(req),
+      uuid: RequestStore.getUuid(),
     };
 
     // Basic, not Bearer. This call is to intake, which already holds this

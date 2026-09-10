@@ -69,13 +69,19 @@ describe('EndpointAuthorize.authorize', () => {
   });
 
   // Resolves once the authorize call has finished *and* the per-request store
-  // has been read, since the deprecation only exists inside the request context.
+  // has been read, since the deprecation (and the uuid) only exist inside the
+  // request context -- RequestStore.getUuid() outside of RequestStore.run()
+  // returns null, so it has to be captured here, before the promise settles.
   const authorize = (request, path = '/students', version = '1') =>
     new Promise((resolve, reject) => {
       RequestStore.run(request, async () => {
         try {
           const response = await EndpointAuthorize.authorize(request, path, version);
-          resolve({ response, deprecation: RequestStore.getDeprecation() });
+          resolve({
+            response,
+            deprecation: RequestStore.getDeprecation(),
+            uuid: RequestStore.getUuid(),
+          });
         } catch (err) {
           reject(err);
         }
@@ -150,6 +156,31 @@ describe('EndpointAuthorize.authorize', () => {
       await authorize(anonymous);
 
       expect(api.calls.authorize[0].body.client_auth).toBe('');
+    });
+
+    describe('the uuid', () => {
+      // Java, Rails and Elixir all send this SDK's request-scoped correlation
+      // id on the authorize call. Without it, intake's
+      // `authorizations.client_request_uuid` column is permanently null for
+      // JS callers, and the authorize half of an interaction can never be
+      // joined to the request half.
+      test('is the uuid RequestStore generated for this request', async () => {
+        const { uuid } = await authorize(req());
+
+        expect(uuid).toBeTruthy();
+        expect(api.calls.authorize[0].body.uuid).toBe(uuid);
+      });
+
+      test('is a different uuid for each request', async () => {
+        const first = await authorize(req(), '/students', '1');
+        const second = await authorize(req(), '/teachers', '1');
+
+        expect(first.uuid).toBeTruthy();
+        expect(second.uuid).toBeTruthy();
+        expect(second.uuid).not.toBe(first.uuid);
+        expect(api.calls.authorize[0].body.uuid).toBe(first.uuid);
+        expect(api.calls.authorize[1].body.uuid).toBe(second.uuid);
+      });
     });
 
     describe('the source IP', () => {
