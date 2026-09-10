@@ -66,10 +66,11 @@ const PayloadBuilder = {
    * response rows for the same call — and to a freshly minted one when there is
    * no request in flight.
    *
-   * `ExceptionWriter` sends `null` in that second case, and this deliberately
-   * does not: `uuid` is required, so `null` is a refused row, and building
-   * outside a request is the normal case for a caller reaching for this module
-   * directly. An id that correlates with nothing still records the error.
+   * `ExceptionWriter` mints in that second case too, so the two producers of an
+   * `application_errors` row now resolve `uuid` the same way. It used to send
+   * `null` there, which intake refuses — `uuid` is required, so every error
+   * raised outside a request was dropped. An id that correlates with nothing
+   * still records the error; no id records nothing.
    * `crypto.randomUUID` is the same source `RequestStore` mints from, so this is
    * that scheme reaching one step further rather than a second one. A caller
    * with its own correlation id — an inbound `X-Request-Id`, say — passes it in.
