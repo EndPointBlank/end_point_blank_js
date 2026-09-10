@@ -11,10 +11,11 @@ const LogMode = Object.freeze({
 /**
  * Thrown when a configured value can never produce a working URL.
  *
- * Raised eagerly, at the point the value is read, rather than left to fail
- * silently later: every write built from a misconfigured `baseUrl` or
- * `logBaseUrl` would otherwise 404, and `DirectWriter` only warning-logs a
- * failed write, so nothing would ever surface the mistake to an operator.
+ * Raised eagerly, the first time the value is read -- not by `configure()`
+ * itself, which never validates -- rather than left to fail silently later:
+ * every write built from a misconfigured `baseUrl` or `logBaseUrl` would
+ * otherwise 404, and `DirectWriter` only warning-logs a failed write, so
+ * nothing would ever surface the mistake to an operator.
  */
 class ConfigurationError extends Error {
   constructor(message) {
@@ -39,8 +40,8 @@ const API_SUFFIX = '/api';
  *
  * Then, if the (now slash-stripped) value already ends in `API_SUFFIX`,
  * raises: that is not a typo normalization can correct, it is a base URL
- * that can never produce a working endpoint URL, so it is better caught here
- * at configure time than left to fail silently on every request forever.
+ * that can never produce a working endpoint URL, so it is better caught here,
+ * on first read, than left to fail silently on every request forever.
  *
  * @param {string} url the raw configured value (already defaulted)
  * @param {string} propertyName `'baseUrl'` or `'logBaseUrl'`, for the message

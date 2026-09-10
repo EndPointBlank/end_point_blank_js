@@ -139,6 +139,16 @@ describe('base URL normalization', () => {
       expect(() => config.requestsUrl).toThrow(ConfigurationError);
     });
 
+    test('is catchable via the package root, not only src/configuration', () => {
+      // The whole point of a named error class is that a caller can catch
+      // it specifically. `epb.ConfigurationError` has to be the exact class
+      // thrown here, not a same-named lookalike, or `catch (e) { if (e
+      // instanceof epb.ConfigurationError) ... }` would silently never match.
+      config.baseUrl = 'https://example.com/api';
+      expect(() => config.baseUrl).toThrow(epb.ConfigurationError);
+      expect(epb.ConfigurationError).toBe(ConfigurationError);
+    });
+
     test('baseUrl and logBaseUrl are checked independently -- one being bad does not affect the other', () => {
       config.baseUrl = 'https://example.com/api';
       config.logBaseUrl = 'https://logs.example.com';
