@@ -33,6 +33,11 @@ const { requestPath } = require('./request-path');
  */
 async function authenticated(req, res, next) {
   try {
+    // The same helper `authorized` and the endpoint registrar call. Composing
+    // this by hand is what the helper exists to prevent: intake resolves the
+    // endpoint before it judges the credential, and matches `path` with SQL
+    // `=`, so a path that differs from the registered one by a mount prefix or
+    // a trailing slash resolves to no row at all.
     const path = requestPath(req);
     const version = VersionFinder.find(req);
 
