@@ -183,6 +183,11 @@ trip. Authorization and authentication requests to EndPointBlank use HTTP Basic 
 `clientId`/`clientSecret` (`Authorization.header()`) — EndPointBlank already holds this service's
 credential, so minting a token to present it back would buy nothing.
 
+Both guards post to the same endpoint and describe the call with the same keys — `client_auth`,
+`path`, `http_method`, `endpoint_version` and `source_ip`. `http_method` is required: a request
+without it is refused with a 401, whatever credential it carries. EndPointBlank ignores any other
+key in the body, so a misspelled field does not fail — it is simply never received.
+
 Handle `UnauthorizedError` explicitly (it is intentionally *not* reported as an application error —
 see [Request/response/error/log reporting](#requestresponseerrorlog-reporting)):
 

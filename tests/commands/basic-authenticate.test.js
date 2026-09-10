@@ -75,14 +75,20 @@ describe('BasicAuthenticate.authenticate', () => {
     });
 
     test('describes the call being authenticated', async () => {
+      // These assertions used to read `action: 'POST'` and `version: '1'`, and
+      // passed for the whole life of the defect: intake reads neither name, so
+      // this command's authenticate call could never succeed against real
+      // intake. Nothing an in-process double is asked can notice that, which is
+      // why the key names are also asserted against a stub that refuses on the
+      // key in tests/express/authenticate-intake-contract.test.js.
       await BasicAuthenticate.authenticate(req(), '/students', '1');
 
       expect(bodySent()).toMatchObject({
         path: '/students',
-        action: 'POST',
+        http_method: 'POST',
         client_auth: 'Basic Y2xpZW50',
         application: 'billing',
-        version: '1',
+        endpoint_version: '1',
       });
     });
 
@@ -95,11 +101,15 @@ describe('BasicAuthenticate.authenticate', () => {
     });
   });
 
+  // On the wire this is `source_ip`, which is what intake stores as
+  // `source_ip_address`. It was sent as `ip_address` — a faithful port of the
+  // same mistake in the Ruby gem — so every value resolved below was computed
+  // correctly and then thrown away by intake.
   describe('the client IP it reports', () => {
     test('prefers an explicitly supplied address', async () => {
       await BasicAuthenticate.authenticate(req({ ip: '192.0.2.9' }), '/students', '1', '203.0.113.1');
 
-      expect(bodySent().ip_address).toBe('203.0.113.1');
+      expect(bodySent().source_ip).toBe('203.0.113.1');
     });
 
     test('is the original client when the request came through a proxy', async () => {
@@ -109,7 +119,7 @@ describe('BasicAuthenticate.authenticate', () => {
         '1',
       );
 
-      expect(bodySent().ip_address).toBe('203.0.113.7');
+      expect(bodySent().source_ip).toBe('203.0.113.7');
     });
 
     test('is the socket address when there is no proxy header', async () => {
@@ -119,19 +129,19 @@ describe('BasicAuthenticate.authenticate', () => {
         '1',
       );
 
-      expect(bodySent().ip_address).toBe('198.51.100.4');
+      expect(bodySent().source_ip).toBe('198.51.100.4');
     });
 
     test('falls back to the framework-resolved IP', async () => {
       await BasicAuthenticate.authenticate(req({ ip: '192.0.2.9' }), '/students', '1');
 
-      expect(bodySent().ip_address).toBe('192.0.2.9');
+      expect(bodySent().source_ip).toBe('192.0.2.9');
     });
 
     test('is null when nothing identifies the caller', async () => {
       await BasicAuthenticate.authenticate(req(), '/students', '1');
 
-      expect(bodySent().ip_address).toBeNull();
+      expect(bodySent().source_ip).toBeNull();
     });
   });
 

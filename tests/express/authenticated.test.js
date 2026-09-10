@@ -75,7 +75,7 @@ describe('authenticated middleware', () => {
     test('reports the detected endpoint version', async () => {
       await run({ headers: { 'x-api-version': 'v2' }, method: 'GET', path: '/students' });
 
-      expect(bodySent().version).toBe('2');
+      expect(bodySent().endpoint_version).toBe('2');
     });
   });
 
