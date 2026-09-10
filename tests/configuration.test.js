@@ -1,7 +1,7 @@
 'use strict';
 
 const epb = require('../src/index');
-const { instance: config, LogMode } = require('../src/configuration');
+const { instance: config, LogMode, ConfigurationError } = require('../src/configuration');
 
 beforeEach(() => config._reset());
 afterEach(() => config._reset());
@@ -68,6 +68,107 @@ test('log/ingest url getters build from logBaseUrl', () => {
   expect(config.applicationErrorsUrl).toBe('https://logs.example.com/api/application_errors');
   expect(config.requestsUrl).toBe('https://logs.example.com/api/application_requests');
   expect(config.responsesUrl).toBe('https://logs.example.com/api/application_responses');
+});
+
+describe('base URL normalization', () => {
+  describe('trailing slashes are stripped', () => {
+    test('a single trailing slash on baseUrl is stripped and builds a correct URL', () => {
+      config.baseUrl = 'https://example.com/';
+      expect(config.baseUrl).toBe('https://example.com');
+      expect(config.authorizeUrl).toBe('https://example.com/api/authorize');
+      expect(config.accessTokenUrl).toBe('https://example.com/api/access_token');
+    });
+
+    test('multiple trailing slashes on baseUrl are stripped and build a correct URL', () => {
+      config.baseUrl = 'https://example.com///';
+      expect(config.baseUrl).toBe('https://example.com');
+      expect(config.authorizeUrl).toBe('https://example.com/api/authorize');
+    });
+
+    test('a single trailing slash on logBaseUrl is stripped and builds a correct URL', () => {
+      config.logBaseUrl = 'https://logs.example.com/';
+      expect(config.logBaseUrl).toBe('https://logs.example.com');
+      expect(config.logUrl).toBe('https://logs.example.com/api/application_logs');
+    });
+
+    test('multiple trailing slashes on logBaseUrl are stripped and build a correct URL', () => {
+      config.logBaseUrl = 'https://logs.example.com////';
+      expect(config.logBaseUrl).toBe('https://logs.example.com');
+      expect(config.logUrl).toBe('https://logs.example.com/api/application_logs');
+    });
+  });
+
+  describe('an /api-suffixed base URL raises', () => {
+    test('baseUrl raises a ConfigurationError with an actionable message', () => {
+      config.baseUrl = 'https://example.com/api';
+      expect(() => config.baseUrl).toThrow(ConfigurationError);
+      expect(() => config.baseUrl).toThrow(
+        "baseUrl 'https://example.com/api' already ends in '/api'"
+      );
+      expect(() => config.baseUrl).toThrow(/Set baseUrl to the origin only/);
+    });
+
+    test('baseUrl still raises once a trailing slash is stripped down to /api', () => {
+      config.baseUrl = 'https://example.com/api/';
+      expect(() => config.baseUrl).toThrow(ConfigurationError);
+    });
+
+    test('building a URL from an /api-suffixed baseUrl raises rather than doubling up', () => {
+      config.baseUrl = 'https://example.com/api';
+      expect(() => config.authorizeUrl).toThrow(ConfigurationError);
+      expect(() => config.accessTokenUrl).toThrow(ConfigurationError);
+    });
+
+    test('logBaseUrl raises a ConfigurationError with an actionable message', () => {
+      config.logBaseUrl = 'https://logs.example.com/api';
+      expect(() => config.logBaseUrl).toThrow(ConfigurationError);
+      expect(() => config.logBaseUrl).toThrow(
+        "logBaseUrl 'https://logs.example.com/api' already ends in '/api'"
+      );
+      expect(() => config.logBaseUrl).toThrow(/Set logBaseUrl to the origin only/);
+    });
+
+    test('logBaseUrl still raises once a trailing slash is stripped down to /api', () => {
+      config.logBaseUrl = 'https://logs.example.com/api/';
+      expect(() => config.logBaseUrl).toThrow(ConfigurationError);
+    });
+
+    test('building a URL from an /api-suffixed logBaseUrl raises rather than doubling up', () => {
+      config.logBaseUrl = 'https://logs.example.com/api';
+      expect(() => config.logUrl).toThrow(ConfigurationError);
+      expect(() => config.requestsUrl).toThrow(ConfigurationError);
+    });
+
+    test('baseUrl and logBaseUrl are checked independently -- one being bad does not affect the other', () => {
+      config.baseUrl = 'https://example.com/api';
+      config.logBaseUrl = 'https://logs.example.com';
+      expect(() => config.logBaseUrl).not.toThrow();
+      expect(config.logUrl).toBe('https://logs.example.com/api/application_logs');
+    });
+  });
+
+  describe('a clean base URL is unaffected', () => {
+    test('baseUrl with no trailing slash and no /api suffix passes through and builds correctly', () => {
+      config.baseUrl = 'https://example.com';
+      expect(() => config.baseUrl).not.toThrow();
+      expect(config.baseUrl).toBe('https://example.com');
+      expect(config.authorizeUrl).toBe('https://example.com/api/authorize');
+      expect(config.accessTokenUrl).toBe('https://example.com/api/access_token');
+    });
+
+    test('logBaseUrl with no trailing slash and no /api suffix passes through and builds correctly', () => {
+      config.logBaseUrl = 'https://logs.example.com';
+      expect(() => config.logBaseUrl).not.toThrow();
+      expect(config.logBaseUrl).toBe('https://logs.example.com');
+      expect(config.logUrl).toBe('https://logs.example.com/api/application_logs');
+    });
+
+    test('a host that merely contains "api" is not mistaken for the /api suffix', () => {
+      config.baseUrl = 'https://api.example.com';
+      expect(() => config.baseUrl).not.toThrow();
+      expect(config.baseUrl).toBe('https://api.example.com');
+    });
+  });
 });
 
 describe('ENDPOINTBLANK_* environment variable configuration', () => {
