@@ -1,5 +1,6 @@
 'use strict';
 
+const { randomUUID } = require('crypto');
 const { instance: config, LogMode } = require('../configuration');
 const { RequestStore } = require('../request-store');
 const { DirectWriter } = require('./direct-writer');
@@ -44,10 +45,23 @@ const LogWriter = {
         log_level: level,
         sent_at: new Date().toISOString(),
         app_name: config.appName,
-        // The caller's inbound id on purpose, not `RequestStore.getUuid()` like
-        // the other three writers. Nothing is refused here, so the rows land
-        // uncorrelated rather than going missing. See sc-380.
-        uuid: req ? (req.headers && req.headers['x-request-id']) || req.id || null : null,
+        // Same source as `RequestWriter`/`ResponseWriter`/`ExceptionWriter`:
+        // this row now carries the SDK's own per-request uuid rather than the
+        // caller's inbound `X-Request-Id`, so all four rows for one
+        // interaction share an id and can be joined. That is a deliberate
+        // trade-off, not an oversight — a customer's own inbound trace id no
+        // longer appears on log rows. It never appeared on the other three
+        // streams either, so this removes the one outlier rather than making
+        // log rows less capable than they used to be relative to the rest of
+        // the SDK. Keeping the caller's id alongside our own, as a second
+        // field, is real future work and is deliberately out of scope here.
+        // See sc-380.
+        //
+        // Falls back to a minted id outside a request context, same as
+        // `ExceptionWriter` under sc-353: a log call outside a request
+        // (background jobs, workers, startup) is exactly as possible as an
+        // exception one, and should not resolve to `null` either.
+        uuid: RequestStore.getUuid() || randomUUID(),
         data,
         source_application_environment_id: RequestStore.getSourceApplicationEnvironmentId(),
         ...stamped,
