@@ -60,7 +60,6 @@ test('control-plane url getters build from baseUrl', () => {
   expect(config.accessTokenUrl).toBe('https://example.com/api/access_token');
   expect(config.authorizeUrl).toBe('https://example.com/api/authorize');
   expect(config.endpointUpdateUrl).toBe('https://example.com/api/application_updates');
-  expect(config.endpointErrorUrl).toBe('https://example.com/api/endpoint_errors');
 });
 
 test('log/ingest url getters build from logBaseUrl', () => {

@@ -27,7 +27,6 @@ describe('DirectWriter', () => {
   describe('routing', () => {
     test.each([
       ['applicationErrorsUrl', 'https://log.epb.test/api/application_errors'],
-      ['endpointErrorUrl', 'https://epb.test/api/endpoint_errors'],
       ['logUrl', 'https://log.epb.test/api/application_logs'],
       ['requestsUrl', 'https://log.epb.test/api/application_requests'],
       ['responsesUrl', 'https://log.epb.test/api/application_responses'],

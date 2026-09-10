@@ -135,10 +135,6 @@ class Configuration {
     return `${this.baseUrl}/api/authorize`;
   }
 
-  get endpointErrorUrl() {
-    return `${this.baseUrl}/api/endpoint_errors`;
-  }
-
   get applicationErrorsUrl() {
     return `${this.logBaseUrl}/api/application_errors`;
   }
