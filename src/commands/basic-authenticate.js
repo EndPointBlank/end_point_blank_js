@@ -29,13 +29,31 @@ const BasicAuthenticate = {
     );
 
     const authHeader = await Authorization.header();
+    // The key names are intake's, not this SDK's choice. `POST /authorize`
+    // reads `client_auth`, `path`, `http_method`, `endpoint_version` and
+    // `source_ip`, and ignores every other key in the body — so a misspelling
+    // here is not a rename, it is a field that was never sent.
+    //
+    // `http_method` is the one that is fatal: every clause of intake's
+    // `AuthorizeAccess.authorize/1` pattern-matches it, so a body without it
+    // falls through to `def authorize(_params), do: {:error, :invalid_params}`
+    // and the controller answers 401. This command sent `action`, so no
+    // credential it could ever present was going to be accepted.
+    //
+    // `endpoint_version` and `source_ip` failed quietly instead: intake
+    // recorded both columns as nil on every authenticate row, and the
+    // deprecation lookup — which is keyed on `endpoint_version` — could never
+    // find a version to report on.
+    //
+    // `endpoint-authorize.js` has always spelled all three correctly, which is
+    // why the authorize path works and this one never has.
     const body = {
       path,
-      action: method,
+      http_method: method,
       client_auth: clientAuth,
       application: config.appName,
-      version,
-      ip_address: ipAddress ?? remoteAddr(req),
+      endpoint_version: version,
+      source_ip: ipAddress ?? remoteAddr(req),
     };
 
     const response = await post(config.authorizeUrl, authHeader, body);

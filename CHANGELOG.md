@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.9.0
+
+### Fixed
+
+- **The `authenticated` guard can now succeed at all.** `BasicAuthenticate`
+  posts to intake's `POST /authorize` with a body whose keys intake does not
+  read. It sent `action` where intake reads `http_method`, and every clause of
+  intake's `AuthorizeAccess.authorize/1` pattern-matches that key — so a body
+  without it falls through to the catch-all, which answers `{:error,
+  :invalid_params}`, which the controller renders as a **401**. No credential
+  this command could present was ever going to be accepted. `authorized` has
+  always spelled the key correctly, which is why one guard worked and the other
+  never has.
+
+  An integrator using `authenticated` sees a route that returned 401 to every
+  caller start returning what its handler returns. Nothing else about the guard
+  changed; there was never a state in which it refused *some* callers and
+  admitted others.
+
+- **Two fields that were silently discarded are now recorded.** Alongside the
+  fatal one, this command sent `version` and `ip_address` where intake reads
+  `endpoint_version` and `source_ip`. Intake ignores keys it does not read, so
+  these did not fail — they simply never arrived, and intake stored nil in both
+  columns on every authenticate row it ever wrote. `endpoint_version` is also
+  what the deprecation lookup keys on, so an `authenticated` route could not
+  report a deprecated version even in principle.
+
+  | key sent before | key intake reads | what it does there |
+  | --- | --- | --- |
+  | `action` | `http_method` | matched by every `AuthorizeAccess.authorize/1` clause; without it the call is refused |
+  | `version` | `endpoint_version` | the deprecation and sunset lookup, and the `endpoint_version` column |
+  | `ip_address` | `source_ip` | stored as `source_ip_address` on the authorization row |
+
+  The keys are sent under one spelling each, not both. Intake would have
+  accepted both, which is exactly why sending both would have left the old name
+  in place indefinitely for the next port to copy.
+
+### Changed
+
+- Authenticate calls now appear in intake's authorization records with a method,
+  a version and a source IP, where previously the row recorded a path and
+  nothing else. Anything reading those records — an audit view, a per-IP rule —
+  sees populated columns for the first time, on rows going forward only. Rows
+  already written stay as they are.
+
+### Unchanged
+
+- `BasicAuthenticate.authenticate(req, path, version, ipAddress)` keeps its
+  signature, and the `ipAddress` parameter keeps its name. Only the key it
+  travels under changed.
+- `EndpointAuthorize` is untouched. It has sent `http_method`,
+  `endpoint_version` and `source_ip` since it was written, and this release
+  brings the authenticate path into line with it rather than the other way
+  around.
+
 ## 0.8.0
 
 ### Fixed
