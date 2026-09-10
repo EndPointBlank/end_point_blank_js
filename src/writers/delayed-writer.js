@@ -23,6 +23,21 @@ const MAX_QUEUE_SIZE = 1000;
 const DROP_WARN_THROTTLE_MS = 30_000;
 
 /**
+ * Renders whatever a `catch` caught as a log-safe string.
+ *
+ * A rejected promise carries an arbitrary value, not necessarily an `Error`.
+ * Reading `.message` off a `null`/`undefined` rejection throws a `TypeError`
+ * straight back out of the handler that was supposed to contain it - which,
+ * in `_drain`, took the whole flush down with it.
+ *
+ * @param {unknown} err
+ * @returns {string}
+ */
+function describeError(err) {
+  return (err && err.message) || String(err);
+}
+
+/**
  * Asynchronous writer that queues payloads and flushes them in the background.
  *
  * JavaScript is single-threaded, so "delayed" means the flush is deferred via
@@ -57,10 +72,19 @@ class DelayedWriter {
   write(payloads) {
     this._queue.push(...payloads);
     this._bound();
-    if (!this._flushing) {
-      this._flushing = true;
-      setImmediate(() => this._flush());
-    }
+    this._schedule();
+  }
+
+  /**
+   * Arms a background flush unless one is already in flight.
+   *
+   * Shared by `write()` and by `_flush()`'s own re-check so the two can never
+   * drift apart on what "already scheduled" means.
+   */
+  _schedule() {
+    if (this._flushing) return;
+    this._flushing = true;
+    setImmediate(() => this._flush());
   }
 
   /**
@@ -88,10 +112,35 @@ class DelayedWriter {
       ? config.workerCount
       : DEFAULT_WORKER_COUNT;
 
-    const workers = Array.from({ length: workerCount }, () => this._drain());
-    await Promise.all(workers);
+    let drained = false;
+    try {
+      const workers = Array.from({ length: workerCount }, () => this._drain());
+      await Promise.all(workers);
+      drained = true;
+    } catch (err) {
+      // `_drain` handles its own send failures, so getting here means a worker
+      // broke in a way we did not anticipate. Swallow it: nothing awaits this
+      // promise, and an unhandled rejection is fatal under Node's default
+      // `--unhandled-rejections=throw`.
+      console.error(`[EndPointBlank] DelayedWriter flush aborted: ${describeError(err)}`);
+    } finally {
+      // Must happen on every path. Leaving this set pins the writer shut: no
+      // later `write()` can arm a flush, so the queue climbs to
+      // `MAX_QUEUE_SIZE` and starts evicting with nothing left to drain it.
+      this._flushing = false;
+    }
 
-    this._flushing = false;
+    // Workers stop as soon as they see an empty queue, which leaves a window
+    // between the last one leaving its loop and the flag clearing above. A
+    // `write()` landing in that window found `_flushing` still true and armed
+    // nothing, so its payloads would sit here until some later write happened
+    // to arrive with the flag clear - in a quiet process, never. Re-check now
+    // that the flag is down; the two statements are synchronous, so there is
+    // no second window between them.
+    //
+    // Only after a clean drain: re-arming when a worker blew up could spin
+    // `setImmediate` forever against a queue nothing is able to empty.
+    if (drained && this._queue.length > 0) this._schedule();
   }
 
   /**
@@ -107,7 +156,7 @@ class DelayedWriter {
       try {
         await this._direct.write(batch);
       } catch (err) {
-        console.error(`[EndPointBlank] DelayedWriter flush error: ${err.message}`);
+        console.error(`[EndPointBlank] DelayedWriter flush error: ${describeError(err)}`);
       }
     }
   }

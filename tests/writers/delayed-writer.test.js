@@ -209,3 +209,172 @@ describe('DelayedWriter background flush', () => {
     expect(sent.flat()).toHaveLength(6);
   });
 });
+
+describe('DelayedWriter flush window (sc-347)', () => {
+  const { instance: config } = require('../../src/configuration');
+
+  const settle = async () => {
+    for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+  };
+
+  /**
+   * Starts a flush and hands back the point in time we care about.
+   *
+   * The returned `window` promise is the promise the *first* in-flight batch is
+   * awaiting. A `.then()` registered on it after the writer has already
+   * suspended on it runs *after* the worker's own continuation - i.e. after
+   * that worker has re-checked the (now empty) queue and left its drain loop,
+   * but before `_flush()` gets to clear `_flushing`. That is exactly the
+   * window this story is about, and reaching it this way is deterministic
+   * promise-callback ordering rather than a tick count that could drift.
+   */
+  const startFlushAndHoldFirstBatch = () => {
+    const sent = [];
+    let release;
+    const window = new Promise(resolve => { release = resolve; });
+
+    DirectWriter.mockImplementation(() => ({
+      // NOT an `async` function: the worker must `await` this exact promise so
+      // our own `.then()` lands behind the worker's resume.
+      write: jest.fn(batch => {
+        sent.push(batch);
+        return sent.length === 1 ? window : Promise.resolve();
+      }),
+    }));
+
+    return { sent, window, release };
+  };
+
+  beforeEach(() => {
+    config._reset();
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    jest.clearAllMocks();
+    config._reset();
+  });
+
+  test('delivers a payload written after every worker has left its drain loop', async () => {
+    const { sent, window, release } = startFlushAndHoldFirstBatch();
+    const writer = new DelayedWriter('logUrl');
+
+    writer.write([{ id: 'first' }]);
+    await new Promise(resolve => setImmediate(resolve));
+
+    // The flush is running, the queue is empty, and the only worker still
+    // alive is parked on `window`.
+    expect(sent.flat().map(p => p.id)).toEqual(['first']);
+    expect(writer._queue).toHaveLength(0);
+    expect(writer._flushing).toBe(true);
+
+    const injected = window.then(() => writer.write([{ id: 'second' }]));
+    release();
+    await injected;
+    await settle();
+
+    // Before this fix `second` sat in the queue forever: it arrived while
+    // `_flushing` was still true, so `write()` scheduled nothing, and the
+    // flush that was about to end had already stopped looking at the queue.
+    expect(sent.flat().map(p => p.id)).toEqual(['first', 'second']);
+    expect(writer._queue).toHaveLength(0);
+    expect(writer._flushing).toBe(false);
+  });
+
+  test('delivers a whole burst of payloads written inside the flush window', async () => {
+    const { sent, window, release } = startFlushAndHoldFirstBatch();
+    const writer = new DelayedWriter('logUrl');
+
+    writer.write([{ id: 0 }]);
+    await new Promise(resolve => setImmediate(resolve));
+
+    const injected = window.then(() => {
+      for (let i = 1; i <= 9; i++) writer.write([{ id: i }]);
+    });
+    release();
+    await injected;
+    await settle();
+
+    expect(sent.flat().map(p => p.id).sort((a, b) => a - b)).toEqual(
+      Array.from({ length: 10 }, (_, i) => i),
+    );
+    expect(writer._queue).toHaveLength(0);
+  });
+
+  test('does not wedge when a worker fails in a way `_drain` cannot format', async () => {
+    // `_drain` catches send failures, but its handler builds the log line out
+    // of `err.message`. A rejection whose value is not an object throws a
+    // TypeError straight back out of the catch that was meant to contain it,
+    // rejecting `Promise.all` - so `_flushing` was never cleared. That pins
+    // the writer permanently: the queue climbs to MAX_QUEUE_SIZE and starts
+    // evicting the oldest payloads with nothing left to drain it, and the
+    // rejection goes unhandled (fatal under Node's default
+    // `--unhandled-rejections=throw`).
+    const attempts = [];
+    DirectWriter.mockImplementation(() => ({
+      write: jest.fn(batch => {
+        attempts.push(batch);
+        return Promise.reject(null);
+      }),
+    }));
+
+    const unhandled = [];
+    const onUnhandled = reason => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+
+    try {
+      const writer = new DelayedWriter('logUrl');
+
+      writer.write([{ id: 0 }]);
+      await settle();
+
+      expect(writer._flushing).toBe(false);
+
+      // ...and the writer is still usable afterwards rather than silently
+      // accumulating and then evicting.
+      for (let i = 1; i <= 1200; i++) writer.write([{ id: i }]);
+      await settle();
+
+      expect(writer._queue).toHaveLength(0);
+      expect(attempts.length).toBeGreaterThan(1);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  test('releases the in-flight flag even if a worker throws outright', async () => {
+    // Belt-and-braces on the guarantee above, independent of *why* a worker
+    // might blow up: whatever happens in the drain path, `_flush` has to hand
+    // the flag back or the writer is shut for the life of the process. The
+    // failure must also be loud rather than swallowed silently.
+    const writer = new DelayedWriter('logUrl');
+    jest.spyOn(writer, '_drain').mockRejectedValue(new Error('worker exploded'));
+
+    const unhandled = [];
+    const onUnhandled = reason => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+
+    try {
+      writer.write([{ id: 'doomed' }]);
+      await settle();
+
+      expect(writer._flushing).toBe(false);
+      expect(unhandled).toEqual([]);
+      expect(console.error).toHaveBeenCalledWith(
+        expect.stringContaining('worker exploded'),
+      );
+
+      // The writer is still armable: a later write schedules a fresh flush.
+      writer._drain.mockRestore();
+      writer.write([{ id: 'after' }]);
+      await settle();
+
+      expect(writer._queue).toHaveLength(0);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+});
