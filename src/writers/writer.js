@@ -34,6 +34,18 @@ class Writer {
    * method destructured every option except that one, so passing it did
    * nothing. A second copy of the option list is a second thing to drift.
    *
+   * There is deliberately no `applyMasking` call here, and adding one would be
+   * a bug rather than an extra safeguard. {@link PayloadBuilder.build} applies
+   * the configured `maskingRules` and `maskHook` itself — it has to, because it
+   * is exported and usable without this class — so what it returns is already
+   * masked. Masking it again would apply every rule twice, and masking is not
+   * idempotent: a `replacement_value` can re-match its own `regex` (`\d+` →
+   * `[$0]` turns `42` into `[42]`, then `[[42]]`), and `maskHook` is arbitrary
+   * caller code. Twice-masked is corrupt, not safer. This is unlike
+   * `RequestWriter`, `ResponseWriter` and `ExceptionWriter`, which shape their
+   * own payloads inline and so each mask their own; this class shapes nothing
+   * and masks nothing. See sc-355.
+   *
    * @param {object} opts - See {@link PayloadBuilder.build}.
    * @returns {Promise<void>}
    */
