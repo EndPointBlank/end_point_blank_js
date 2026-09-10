@@ -3,12 +3,18 @@
 /**
  * The single place a request's endpoint path is decided.
  *
- * Registration and authorization must produce byte-identical paths: intake
+ * Three call sites name an endpoint — registration, authorization, and
+ * authentication — and all three must produce byte-identical paths: intake
  * stores what it is told at registration and matches it exactly at authorize
  * time (`Intake.PathNormalizer` only rewrites `{var}` to `:var` — it does not
- * touch trailing slashes). If these two ever disagree, every request fails with
- * `missing_target_endpoint` while both halves look correct in isolation. Hence
- * one function, used by both.
+ * touch trailing slashes). A guard that resolves the path differently from
+ * registration asks about an endpoint intake has never been told about, so
+ * every request through it fails with `missing_target_endpoint` while both
+ * halves look correct in isolation. Hence one function, used by all three.
+ *
+ * `authenticated` kept a transcription of its own until it was moved here — it
+ * read `req.route?.path || req.path || req.url`, with no `req.baseUrl` and no
+ * normalization, so a router mounted at `/whoami` authenticated as `/`.
  */
 
 /**
