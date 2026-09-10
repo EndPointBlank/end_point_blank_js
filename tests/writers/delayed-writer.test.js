@@ -377,4 +377,57 @@ describe('DelayedWriter flush window (sc-347)', () => {
       process.off('unhandledRejection', onUnhandled);
     }
   });
+
+  test('holds the in-flight flag until the whole cohort settles, not the first failure', async () => {
+    // `Promise.all` settles the instant one worker rejects. The `finally` that
+    // clears `_flushing` would then run while the surviving workers were still
+    // awaiting their POSTs, and the next `write()` would arm a second cohort on
+    // top of the live one - putting more than `workerCount` requests in flight,
+    // which is the only concurrency bound this class offers. `splice` is
+    // synchronous so nothing is sent twice; the limit is just quietly exceeded.
+    //
+    // `Promise.allSettled` waits for the cohort. This test fails against `all`.
+    //
+    // The rejection has to come from `_drain` itself, not from a failed POST:
+    // `_drain` catches its own send failures, so a rejecting `write` never
+    // rejects the worker. That is why this is the unanticipated path - and why
+    // mocking `DirectWriter` here would prove nothing.
+    config.workerCount = 3;
+
+    const writer = new DelayedWriter('logUrl');
+    const releases = [];
+    let call = 0;
+
+    jest.spyOn(writer, '_drain').mockImplementation(() => {
+      call += 1;
+      if (call === 1) return Promise.reject(new Error('first worker died'));
+      return new Promise(resolve => { releases.push(resolve); });
+    });
+
+    const unhandled = [];
+    const onUnhandled = reason => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+
+    try {
+      writer.write([{ id: 0 }]);
+      await settle();
+
+      // Worker 1 has rejected; workers 2 and 3 are still running. The flag must
+      // still be held, or a concurrent write arms a second cohort on top.
+      expect(writer._flushing).toBe(true);
+      expect(call).toBe(3);
+
+      releases.forEach(release => release());
+      await settle();
+
+      // Cohort complete: only now does the flag drop, and the failure is loud.
+      expect(writer._flushing).toBe(false);
+      expect(unhandled).toEqual([]);
+      expect(console.error).toHaveBeenCalledWith(
+        expect.stringContaining('first worker died'),
+      );
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
 });

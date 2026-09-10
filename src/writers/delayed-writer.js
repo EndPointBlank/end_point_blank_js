@@ -115,13 +115,28 @@ class DelayedWriter {
     let drained = false;
     try {
       const workers = Array.from({ length: workerCount }, () => this._drain());
-      await Promise.all(workers);
-      drained = true;
+      // `allSettled`, not `all`. `all` settles the moment one worker rejects,
+      // while its siblings are still awaiting their POSTs - so the `finally`
+      // below would clear `_flushing` mid-cohort, and the next `write()` would
+      // arm a second cohort on top of the first. More than `workerCount`
+      // requests would then be in flight, which is the one bound this class
+      // offers its caller. `splice` is synchronous so nothing would be sent
+      // twice, but the concurrency limit would be silently exceeded.
+      //
+      // `_drain` swallows its own send failures, so a rejected worker is the
+      // unanticipated path; on the ordinary one every worker has already
+      // returned and waiting for the cohort costs nothing.
+      const results = await Promise.allSettled(workers);
+      const rejected = results.filter(r => r.status === 'rejected');
+      for (const { reason } of rejected) {
+        console.error(`[EndPointBlank] DelayedWriter flush aborted: ${describeError(reason)}`);
+      }
+      drained = rejected.length === 0;
     } catch (err) {
-      // `_drain` handles its own send failures, so getting here means a worker
-      // broke in a way we did not anticipate. Swallow it: nothing awaits this
-      // promise, and an unhandled rejection is fatal under Node's default
-      // `--unhandled-rejections=throw`.
+      // Backstop only: `Promise.allSettled` does not reject, so reaching here
+      // means something threw synchronously before it. Swallow it - nothing
+      // awaits this promise, and an unhandled rejection is fatal under Node's
+      // default `--unhandled-rejections=throw`.
       console.error(`[EndPointBlank] DelayedWriter flush aborted: ${describeError(err)}`);
     } finally {
       // Must happen on every path. Leaving this set pins the writer shut: no
