@@ -171,6 +171,40 @@ describe('the intake POST /api/application_errors payload contract', () => {
     });
   });
 
+  /**
+   * The same required-field contract with no request in flight — a background
+   * job, a worker pool, a failure during boot.
+   *
+   * This block did not exist, and its absence is how sc-353 survived a suite
+   * written specifically to stop these two from drifting. Every check above
+   * runs inside `RequestStore.run`, where the minted uuid makes both producers
+   * look correct; outside one, `ExceptionWriter` sent `uuid: null` and intake
+   * refused the row, so the crashes with no request to blame were the only ones
+   * never recorded. A contract asserted in exactly one context only holds in
+   * that context.
+   *
+   * Only the required fields are compared out here. The shapes legitimately
+   * differ: `ExceptionWriter` omits `stamped_path`/`stamped_http_method` when
+   * there is no route to stamp, where `PayloadBuilder` sends them as null.
+   */
+  const producersOutsideARequest = [
+    ['PayloadBuilder', async () =>
+      PayloadBuilder.build({ message: 'boom', error: new Error('boom') })],
+    ['ExceptionWriter', async () => {
+      await ExceptionWriter.write(new Error('boom'));
+      return post.mock.calls[0][2].payload[0];
+    }],
+  ];
+
+  describe.each(producersOutsideARequest)('%s, with no request in flight', (_name, produce) => {
+    test.each(KEYS_INTAKE_REQUIRES)('still gives “%s” a value intake accepts', async key => {
+      const payload = await produce();
+
+      expect(payload[key]).toEqual(expect.anything());
+      expect(payload[key]).not.toBe('');
+    });
+  });
+
   test('the two producers agree, key for key, on the row they build', async () => {
     const request = req();
 

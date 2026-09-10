@@ -7,6 +7,8 @@ const { instance: config, LogMode } = require('../../src/configuration');
 const { RequestStore } = require('../../src/request-store');
 const { RequestWriter } = require('../../src/writers/request-writer');
 
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 describe('RequestWriter.write', () => {
   const sentPayload = () => post.mock.calls[0][2].payload[0];
 
@@ -205,10 +207,27 @@ describe('RequestWriter.write', () => {
       expect(sentPayload().uuid).toBe('express-1');
     });
 
-    test('sends null when nothing identifies the request', async () => {
+    test('mints an id when nothing else identifies the request', async () => {
+      // This read `expect(sentPayload().uuid).toBeNull()` and passed, which is
+      // the same mistake `ExceptionWriter`'s suite made and the same reason it
+      // went unnoticed: null looked like an honest "nothing to correlate on".
+      // It is not. `uuid` is required on this stream
+      // (`intake/lib/intake/interactions/application_request.ex:77-84`), and
+      // the changeset feeds `Intake.BulkInsert.insert_all/3`, which drops an
+      // invalid row rather than degrading it — so the assertion was pinning a
+      // request record intake never stored. sc-353.
       await RequestWriter.write(req());
 
-      expect(sentPayload().uuid).toBeNull();
+      expect(sentPayload().uuid).toMatch(UUID_V4);
+    });
+
+    test('prefers the inbound id to a minted one, so callers keep their trace', async () => {
+      // The order matters, not just the presence: minting ahead of
+      // `x-request-id` would break correlation with the caller's other
+      // services, which is the whole point of accepting the header.
+      await RequestWriter.write(req({ headers: { 'x-request-id': 'req-abc' }, id: 'express-1' }));
+
+      expect(sentPayload().uuid).toBe('req-abc');
     });
   });
 

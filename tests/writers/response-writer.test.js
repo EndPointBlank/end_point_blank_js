@@ -41,6 +41,53 @@ describe('ResponseWriter', () => {
 
   const sentPayload = () => writeSpy.mock.calls[0][0][0];
 
+  describe('correlating the record', () => {
+    test('sends the id the SDK minted for the request being served', async () => {
+      let expected;
+
+      await RequestStore.run({ method: 'GET', headers: {} }, async () => {
+        expected = RequestStore.getUuid();
+        await ResponseWriter.write(200, {}, null, {});
+      });
+
+      expect(sentPayload().uuid).toBe(expected);
+    });
+
+    test('sends null outside a request rather than minting one', async () => {
+      // Deliberately unlike `ExceptionWriter` and `RequestWriter`, which sc-353
+      // changed to mint here. Those two stream to tables that require `uuid`,
+      // so a null is a refused row and a fresh id is the difference between
+      // recording the event and recording nothing. `application_responses`
+      // requires only `[:status, :target_application_environment_id]`
+      // (`intake/lib/intake/interactions/application_response.ex:44`), so this
+      // row is stored either way — and a minted id would join to nothing, the
+      // same as null, while reading like a correlation that exists.
+      await ResponseWriter.write(200, {}, null, {});
+
+      expect(sentPayload().uuid).toBeNull();
+    });
+
+    test('ignores an inbound request id, which only the store can supply', async () => {
+      // The writer used to fall back to `x-request-id` and `req.id` off the
+      // stored request. Both were unreachable: `req` comes from
+      // `RequestStore.get()`, which is non-empty only inside
+      // `RequestStore.run`, and `run` always mints a uuid — so `getUuid()` was
+      // truthy whenever those terms had a request to read. They are gone, and
+      // this pins that removal: a real request carrying a header the SDK is not
+      // tracking still correlates on the minted id, never on the header.
+      let expected;
+      const req = { method: 'GET', id: 'express-1', headers: { 'x-request-id': 'req-abc' } };
+
+      await RequestStore.run(req, async () => {
+        expected = RequestStore.getUuid();
+        await ResponseWriter.write(200, {}, null, {});
+      });
+
+      expect(sentPayload().uuid).toBe(expected);
+      expect(sentPayload().uuid).not.toBe('req-abc');
+    });
+  });
+
   describe('the response body', () => {
     test('is recorded as-is when it is small', async () => {
       await ResponseWriter.write(200, {}, '{"ok":true}');

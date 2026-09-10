@@ -7,6 +7,10 @@ const { instance: config, LogMode } = require('../../src/configuration');
 const { RequestStore } = require('../../src/request-store');
 const { ExceptionWriter } = require('../../src/writers/exception-writer');
 
+// Same shape `PayloadBuilder` mints, and the same matcher its tests use: both
+// producers build the one `POST /api/application_errors` row.
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 describe('ExceptionWriter.write', () => {
   const sentPayload = () => post.mock.calls[0][2].payload[0];
 
@@ -125,11 +129,40 @@ describe('ExceptionWriter.write', () => {
       expect(sentPayload().message).toBe('worker crashed');
     });
 
-    test('leaves the request-scoped fields out rather than guessing', async () => {
+    test('leaves the route stamps out rather than guessing at them', async () => {
       await ExceptionWriter.write(new Error('worker crashed'));
 
       expect(sentPayload()).not.toHaveProperty('stamped_path');
-      expect(sentPayload().uuid).toBeNull();
+      expect(sentPayload()).not.toHaveProperty('stamped_http_method');
+    });
+
+    test('still carries a correlation id, because a row without one is refused', async () => {
+      // This assertion used to read `expect(sentPayload().uuid).toBeNull()`,
+      // and it sat under the heading above as though `uuid` were one more
+      // request-scoped field the writer was right not to guess at. It passed
+      // for the life of the defect, which is why the defect had a life: the
+      // test blessed a row intake refuses.
+      //
+      // `uuid` is not like the two stamps. Intake's `ApplicationError`
+      // changeset ends `validate_required([:message, :uuid, :app_name,
+      // :sent_at])` (`intake/lib/intake/errors/application_error.ex:46`), so a
+      // null there is not a modest row — it is a 422 and no row at all. Every
+      // error raised outside a request was discarded: background jobs,
+      // workers, startup failures, the crashes an operator most wants to hear
+      // about. Declining to guess is the correct instinct for `stamped_path`,
+      // where a wrong value would mislead, and the wrong one for `uuid`, where
+      // the only alternative to a fresh id is silence. sc-353.
+      await ExceptionWriter.write(new Error('worker crashed'));
+
+      expect(sentPayload().uuid).toMatch(UUID_V4);
+    });
+
+    test('mints a fresh id per report, so unrelated crashes do not look like one', async () => {
+      await ExceptionWriter.write(new Error('worker crashed'));
+      await ExceptionWriter.write(new Error('other worker crashed'));
+
+      const [first, second] = post.mock.calls.map(call => call[2].payload[0].uuid);
+      expect(first).not.toBe(second);
     });
   });
 
