@@ -17,6 +17,7 @@ describe('Writer', () => {
     config.clientId = 'client-id';
     config.clientSecret = 'client-secret';
     config.baseUrl = 'https://epb.test';
+    config.logBaseUrl = 'https://log.epb.test';
     post.mockReset();
     post.mockResolvedValue({ status: 201, ok: true });
     jest.spyOn(console, 'warn').mockImplementation(() => {});
@@ -29,53 +30,69 @@ describe('Writer', () => {
   });
 
   test('sends a built payload to the endpoint named by its URL key', async () => {
-    await new Writer('endpointErrorUrl').write({ message: 'boom', status: 500 });
+    // `endpointErrorUrl` is the caller's choice, not this class's. Note that
+    // intake serves no `/api/endpoint_errors` route — the error ingest that
+    // exists is `applicationErrorsUrl`, and that is the contract
+    // `PayloadBuilder` builds for.
+    await new Writer('endpointErrorUrl').write({ message: 'boom' });
 
     expect(post.mock.calls[0][0]).toBe('https://epb.test/api/endpoint_errors');
   });
 
-  test('reports the message, status and route it was given', async () => {
-    await new Writer('endpointErrorUrl').write({
+  test('reports the message and the route it was given', async () => {
+    await new Writer('applicationErrorsUrl').write({
       message: 'boom',
-      status: 500,
       path: '/v1/students',
       action: 'GET',
-      version: '2',
     });
 
     expect(sentPayload()).toMatchObject({
       message: 'boom',
-      status: 500,
-      path: '/v1/students',
-      action: 'GET',
-      endpoint_version: '2',
+      stamped_path: '/v1/students',
+      stamped_http_method: 'GET',
     });
   });
 
   test('turns an error into a frame-by-frame stacktrace', async () => {
-    await new Writer('endpointErrorUrl').write({ message: 'boom', status: 500, error: new Error('boom') });
+    await new Writer('applicationErrorsUrl').write({ message: 'boom', error: new Error('boom') });
 
     expect(Array.isArray(sentPayload().stacktrace)).toBe(true);
   });
 
-  test('includes the URL of the request being served', async () => {
-    const req = { protocol: 'https', headers: { host: 'api.example.test' }, originalUrl: '/v1/students' };
+  test('forwards every option to the builder, including the ones it never listed', async () => {
+    // This method used to relist the builder's options and destructure them
+    // one by one, and `stacktrace` was not among them: a caller-supplied trace
+    // was accepted and thrown away. The list is gone; `opts` goes through whole.
+    await new Writer('applicationErrorsUrl').write({
+      message: 'boom',
+      stacktrace: ['at handcrafted (a.js:1:1)'],
+      uuid: 'req-abc',
+    });
+
+    expect(sentPayload()).toMatchObject({
+      stacktrace: ['at handcrafted (a.js:1:1)'],
+      uuid: 'req-abc',
+    });
+  });
+
+  test('stamps the request being served', async () => {
+    const req = { path: '/v1/students', method: 'GET' };
 
     await RequestStore.run(req, () =>
-      new Writer('endpointErrorUrl').write({ message: 'boom', status: 500 }),
+      new Writer('applicationErrorsUrl').write({ message: 'boom' }),
     );
 
-    expect(sentPayload().url).toBe('https://api.example.test/v1/students');
+    expect(sentPayload().stamped_path).toBe('/v1/students');
   });
 
   test('keeps one underlying writer instead of building a new one per record', async () => {
     // A `DelayedWriter` owns the pending queue. Rebuilding it on every write
     // would strand queued records in a writer nobody holds a reference to.
     config.logMode = LogMode.DELAYED;
-    const writer = new Writer('endpointErrorUrl');
+    const writer = new Writer('applicationErrorsUrl');
 
-    await writer.write({ message: 'one', status: 500 });
-    await writer.write({ message: 'two', status: 500 });
+    await writer.write({ message: 'one' });
+    await writer.write({ message: 'two' });
     await new Promise(resolve => setImmediate(resolve));
 
     expect(post).toHaveBeenCalledTimes(1);
@@ -83,7 +100,7 @@ describe('Writer', () => {
   });
 
   test('waits for the send in direct mode', async () => {
-    await new Writer('endpointErrorUrl').write({ message: 'boom', status: 500 });
+    await new Writer('applicationErrorsUrl').write({ message: 'boom' });
 
     expect(post).toHaveBeenCalledTimes(1);
   });

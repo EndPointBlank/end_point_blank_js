@@ -4,6 +4,8 @@ const { PayloadBuilder } = require('../src/payload-builder');
 const { RequestStore } = require('../src/request-store');
 const { instance: config } = require('../src/configuration');
 
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 describe('PayloadBuilder.build', () => {
   beforeEach(() => {
     config._reset();
@@ -19,18 +21,14 @@ describe('PayloadBuilder.build', () => {
       : PayloadBuilder.build(opts);
 
   describe('the fields it always sends', () => {
-    test('carries the message, status and configured application', () => {
-      const payload = build({ message: 'boom', status: 500 });
+    test('carries the message and the configured application', () => {
+      const payload = build({ message: 'boom' });
 
-      expect(payload).toMatchObject({ message: 'boom', status: 500, app_name: 'billing' });
-    });
-
-    test('stamps the environment it is running in', () => {
-      expect(build({ message: 'boom', status: 500 }).env).toBe('staging');
+      expect(payload).toMatchObject({ message: 'boom', app_name: 'billing' });
     });
 
     test('stamps the time as an ISO 8601 string', () => {
-      const payload = build({ message: 'boom', status: 500, sentAt: new Date('2026-08-01T14:15:16Z') });
+      const payload = build({ message: 'boom', sentAt: new Date('2026-08-01T14:15:16Z') });
 
       expect(payload.sent_at).toBe('2026-08-01T14:15:16.000Z');
     });
@@ -38,31 +36,64 @@ describe('PayloadBuilder.build', () => {
     test('stamps the current time when none is supplied', () => {
       const before = Date.now();
 
-      const stamped = Date.parse(build({ message: 'boom', status: 500 }).sent_at);
+      const stamped = Date.parse(build({ message: 'boom' }).sent_at);
 
       expect(stamped).toBeGreaterThanOrEqual(before);
       expect(stamped).toBeLessThanOrEqual(Date.now());
     });
 
-    test('names the endpoint version with a qualified key', () => {
-      // The wire contract is `endpoint_version`; a bare `version` would be
-      // dropped on ingest.
-      const payload = build({ message: 'boom', status: 500, version: '2' });
-
-      expect(payload.endpoint_version).toBe('2');
-      expect(payload).not.toHaveProperty('version');
-    });
-
     test('defaults the optional route details to null rather than omitting them', () => {
-      const payload = build({ message: 'boom', status: 500 });
+      const payload = build({ message: 'boom' });
 
-      expect(payload.path).toBeNull();
-      expect(payload.action).toBeNull();
-      expect(payload.endpoint_version).toBeNull();
+      expect(payload.stamped_path).toBeNull();
+      expect(payload.stamped_http_method).toBeNull();
+      expect(payload.source_application_environment_id).toBeNull();
+    });
+  });
+
+  describe('the correlation id', () => {
+    // Intake requires a `uuid` on every error row. Without one the row is
+    // refused, and since sc-310 a batch of nothing but refused rows answers
+    // 422 rather than the 201 it used to.
+    test('is always present', () => {
+      expect(build({ message: 'boom' }).uuid).toEqual(expect.any(String));
     });
 
-    test('defaults the request headers to an empty map', () => {
-      expect(build({ message: 'boom', status: 500 }).request_headers).toEqual({});
+    test('is the id the SDK minted for the request being served', () => {
+      // This is the join to the request and response rows for the same call,
+      // which is where the fields intake does not keep on an error row live.
+      let minted;
+      const req = { path: '/x', method: 'GET' };
+
+      const payload = RequestStore.run(req, () => {
+        minted = RequestStore.getUuid();
+        return PayloadBuilder.build({ message: 'boom' });
+      });
+
+      expect(payload.uuid).toBe(minted);
+    });
+
+    test('is minted outside a request rather than left null', () => {
+      // A background job or a startup failure has no request to borrow an id
+      // from, and `null` is a rejected row. An id that correlates with nothing
+      // still records the error.
+      expect(build({ message: 'boom' }).uuid).toMatch(UUID_V4);
+    });
+
+    test('gives two unrelated reports two different ids', () => {
+      expect(build({ message: 'one' }).uuid).not.toBe(build({ message: 'two' }).uuid);
+    });
+
+    test('prefers a correlation id the caller supplied', () => {
+      // The way a caller not running the middleware carries an inbound
+      // X-Request-Id onto the row.
+      expect(build({ message: 'boom', uuid: 'req-abc' }).uuid).toBe('req-abc');
+    });
+
+    test('prefers the caller\'s id over the one minted for the request', () => {
+      const payload = build({ message: 'boom', uuid: 'req-abc' }, { path: '/x', method: 'GET' });
+
+      expect(payload.uuid).toBe('req-abc');
     });
   });
 
@@ -72,7 +103,7 @@ describe('PayloadBuilder.build', () => {
       // and a single string arrives as a one-frame trace nobody can read.
       const error = new Error('boom');
 
-      const payload = build({ message: 'boom', status: 500, error });
+      const payload = build({ message: 'boom', error });
 
       expect(Array.isArray(payload.stacktrace)).toBe(true);
       expect(payload.stacktrace.length).toBeGreaterThan(0);
@@ -81,13 +112,13 @@ describe('PayloadBuilder.build', () => {
     test('excludes the error message line, which is already the message', () => {
       const error = new Error('boom');
 
-      expect(build({ message: 'boom', status: 500, error }).stacktrace[0]).toMatch(/^at /);
+      expect(build({ message: 'boom', error }).stacktrace[0]).toMatch(/^at /);
     });
 
     test('has no blank or padded frames', () => {
       const error = new Error('boom');
 
-      for (const frame of build({ message: 'boom', status: 500, error }).stacktrace) {
+      for (const frame of build({ message: 'boom', error }).stacktrace) {
         expect(frame).toBe(frame.trim());
         expect(frame).not.toBe('');
       }
@@ -98,7 +129,6 @@ describe('PayloadBuilder.build', () => {
 
       const payload = build({
         message: 'boom',
-        status: 500,
         error,
         stacktrace: ['at handcrafted (a.js:1:1)'],
       });
@@ -107,85 +137,97 @@ describe('PayloadBuilder.build', () => {
     });
 
     test('is null when there is no error to trace', () => {
-      expect(build({ message: 'boom', status: 500 }).stacktrace).toBeNull();
+      expect(build({ message: 'boom' }).stacktrace).toBeNull();
     });
 
     test('is null for an error carrying no stack', () => {
       const error = new Error('boom');
       delete error.stack;
 
-      expect(build({ message: 'boom', status: 500, error }).stacktrace).toBeNull();
+      expect(build({ message: 'boom', error }).stacktrace).toBeNull();
     });
   });
 
   describe('the request it was serving', () => {
-    test('is absent when the payload is built outside a request', () => {
-      const payload = build({ message: 'boom', status: 500 });
+    test('stamps the route under the name intake reads', () => {
+      const req = { path: '/v1/students', method: 'GET' };
 
-      expect(payload.url).toBeNull();
-      expect(payload.request).toBeNull();
+      expect(build({ message: 'boom' }, req).stamped_path).toBe('/v1/students');
     });
 
-    test('reconstructs the full URL the client called', () => {
-      const req = { protocol: 'https', headers: { host: 'api.example.test' }, originalUrl: '/v1/students?q=1' };
+    test('stamps the HTTP method under the name intake reads', () => {
+      const req = { path: '/v1/students', method: 'GET' };
 
-      expect(build({ message: 'boom', status: 500 }, req).url).toBe(
-        'https://api.example.test/v1/students?q=1',
-      );
+      expect(build({ message: 'boom' }, req).stamped_http_method).toBe('GET');
     });
 
-    test('infers https from an encrypted connection when the framework did not say', () => {
-      // A bare Node `IncomingMessage` has no `protocol`; reporting the wrong
-      // scheme makes the logged URL unusable for reproducing the call.
-      const req = { connection: { encrypted: true }, headers: { host: 'api.example.test' }, url: '/x' };
+    test('falls back to the full URL when the framework exposes no path', () => {
+      // A bare Node `IncomingMessage` has no `path`; the same fallback
+      // `ExceptionWriter` makes.
+      const req = { originalUrl: '/v1/students?q=1', method: 'GET' };
 
-      expect(build({ message: 'boom', status: 500 }, req).url).toBe('https://api.example.test/x');
+      expect(build({ message: 'boom' }, req).stamped_path).toBe('/v1/students?q=1');
     });
 
-    test('infers http for a plain connection', () => {
-      const req = { connection: {}, headers: { host: 'api.example.test' }, url: '/x' };
+    test('prefers the route the caller named over the one in flight', () => {
+      // A route pattern beats a concrete path for grouping, and the caller is
+      // the only one who has it.
+      const req = { path: '/v1/students/7', method: 'GET' };
 
-      expect(build({ message: 'boom', status: 500 }, req).url).toBe('http://api.example.test/x');
+      const payload = build({ message: 'boom', path: '/v1/students/:id', action: 'PATCH' }, req);
+
+      expect(payload.stamped_path).toBe('/v1/students/:id');
+      expect(payload.stamped_http_method).toBe('PATCH');
     });
 
-    test('falls back to the resolved hostname when there is no Host header', () => {
-      const req = { protocol: 'http', hostname: 'api.example.test', url: '/x' };
+    test('carries the source application environment resolved for the request', () => {
+      const req = { path: '/x', method: 'GET' };
 
-      expect(build({ message: 'boom', status: 500 }, req).url).toBe('http://api.example.test/x');
+      const payload = RequestStore.run(req, () => {
+        RequestStore.setSourceApplicationEnvironmentId('env-99');
+        return PayloadBuilder.build({ message: 'boom' });
+      });
+
+      expect(payload.source_application_environment_id).toBe('env-99');
+    });
+  });
+
+  describe('the options intake has nowhere to put', () => {
+    // `status`, `headers` and `version` stay in the signature so existing
+    // calls keep working, but `application_errors` has no column for any of
+    // them and the error controller's `build_attrs/2` does not read them.
+    // Sending them anyway is what made eight of the twelve keys on this
+    // payload dead weight.
+    test('accepts them without sending them', () => {
+      const payload = build({
+        message: 'boom',
+        status: 500,
+        headers: { authorization: 'Bearer x' },
+        version: '2',
+      });
+
+      expect(payload).not.toHaveProperty('status');
+      expect(payload).not.toHaveProperty('request_headers');
+      expect(payload).not.toHaveProperty('headers');
+      expect(payload).not.toHaveProperty('endpoint_version');
+      expect(payload).not.toHaveProperty('version');
     });
 
-    test('falls back to localhost when the host is unknowable', () => {
-      const req = { protocol: 'http', url: '/x' };
+    test('does not send the request it was serving, which lives on the request row', () => {
+      const req = {
+        protocol: 'https',
+        headers: { host: 'api.example.test' },
+        originalUrl: '/v1/students?q=1',
+        path: '/v1/students',
+        method: 'POST',
+        body: { amount: 42 },
+      };
 
-      expect(build({ message: 'boom', status: 500 }, req).url).toBe('http://localhost/x');
-    });
+      const payload = build({ message: 'boom' }, req);
 
-    test('serialises a parsed body so it survives the wire', () => {
-      const req = { protocol: 'http', headers: {}, url: '/x', body: { amount: 42 } };
-
-      expect(build({ message: 'boom', status: 500 }, req).request).toBe('{"amount":42}');
-    });
-
-    test('passes a raw string body through unchanged', () => {
-      const req = { protocol: 'http', headers: {}, url: '/x', body: 'amount=42' };
-
-      expect(build({ message: 'boom', status: 500 }, req).request).toBe('amount=42');
-    });
-
-    test('sends null when no body parser ran', () => {
-      const req = { protocol: 'http', headers: {}, url: '/x' };
-
-      expect(build({ message: 'boom', status: 500 }, req).request).toBeNull();
-    });
-
-    test('sends null rather than throwing on a body that cannot be serialised', () => {
-      // Error reporting must not itself raise; a circular body would otherwise
-      // replace the customer's real error with a TypeError from the reporter.
-      const circular = { name: 'loop' };
-      circular.self = circular;
-      const req = { protocol: 'http', headers: {}, url: '/x', body: circular };
-
-      expect(build({ message: 'boom', status: 500 }, req).request).toBeNull();
+      expect(payload).not.toHaveProperty('url');
+      expect(payload).not.toHaveProperty('request');
+      expect(payload).not.toHaveProperty('env');
     });
   });
 });
