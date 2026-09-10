@@ -32,9 +32,18 @@ const { RequestStore } = require('./request-store');
  * request and response rows for the same request, which the `uuid` here joins
  * to: `url` as `host`/`scheme`/`port`/`path`, `request` as `request`,
  * `request_headers` as `headers` and `endpoint_version` as `endpoint_version`
- * on `application_requests`; `status` on `application_responses`. `env` is no
- * longer taken from the client anywhere in the ingest path — intake derives an
- * environment from the credential the call presents.
+ * on `application_requests`; `status` on `application_responses`.
+ *
+ * `env` is the one that needs care, because it is dropped for a narrower reason
+ * than it first appears. intake still DOES take a client's `env` on
+ * `/api/application_requests` and `/api/application_responses` — sc-321 kept it
+ * deliberately, deriving the true environment from the credential and keeping
+ * the client's claim beside it so `Intake.Ingest.EnvironmentClaim` can log a
+ * mismatch, which is how a misconfigured application gets noticed. That check is
+ * wired into those two controllers and nowhere else. `application_errors` has no
+ * `env` column, no cast for one, and no `EnvironmentClaim` call, so an `env`
+ * sent here is discarded with nothing observing it. It is dropped because this
+ * payload has no home for it — not because the claim stopped being wanted.
  *
  * There is no `EndPointBlank::PayloadBuilder` in the Ruby gem, whatever this
  * file used to claim: the gem shapes an error payload in
