@@ -43,6 +43,10 @@
     ],
     "setupFilesAfterEnv": [
       "<rootDir>/tests/setup/no-network.js"
+    ],
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/\\.claude/"
     ]
   }
 }
