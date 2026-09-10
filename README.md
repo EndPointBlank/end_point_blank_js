@@ -81,9 +81,10 @@ variable > default.**
 | `maskHook` | — | `null` | See [Data masking](#data-masking). |
 
 Note: `environment` resolution differs slightly depending on where it's read from. `config.environment`
-itself resolves `explicit > ENDPOINTBLANK_ENV > null`. Error-report payloads (built via
-`PayloadBuilder`/`SessionConfiguration.envName()`) go one step further: `explicit > ENDPOINTBLANK_ENV
-> NODE_ENV > 'production'`.
+itself resolves `explicit > ENDPOINTBLANK_ENV > null`. `SessionConfiguration.envName()` goes one step
+further — `explicit > ENDPOINTBLANK_ENV > NODE_ENV > 'production'` — and is exported for callers that
+want that chain. Error-report payloads no longer carry an `env` of their own: intake's error ingest has
+no column for one, and derives a call's environment from the credential it presents.
 
 There is no env-var fallback for `applicationVersion`, `versionFinder`, `logMode`, `tokenTtl`,
 `cacheTtl`, `trustProxyHeaders`, `workerCount`, `maskingRules`, or `maskHook` — those must be
@@ -474,7 +475,7 @@ src/
   authorization.js             # Basic/Bearer auth header generation
   unauthorized-error.js        # UnauthorizedError
   request-store.js             # AsyncLocalStorage-based per-request context
-  payload-builder.js           # Builds error-report payloads
+  payload-builder.js           # Builds application-error payloads for intake's error ingest
   log-entry.js                 # LogEntry value object
   masking.js                   # JSONPath + regex masking engine
   fast-json-truncator.js       # JSON truncation helper

@@ -6,10 +6,15 @@ const { DirectWriter } = require('./direct-writer');
 const { DelayedWriter } = require('./delayed-writer');
 
 /**
- * Factory writer that delegates to {@link DirectWriter} or {@link DelayedWriter}
- * based on the configured {@link LogMode}.
+ * Factory writer that builds an error payload with {@link PayloadBuilder} and
+ * delegates the send to {@link DirectWriter} or {@link DelayedWriter}, per the
+ * configured {@link LogMode}.
  *
- * Equivalent to the Ruby gem's `EndPointBlank::Writers::Writer`.
+ * Nothing inside this library uses it; like {@link PayloadBuilder} it exists
+ * for callers reaching in through `./src/*`, which is why the two drifted from
+ * the writers the middleware actually drives. There is no
+ * `EndPointBlank::Writers::Writer` in the Ruby gem, whatever this file used to
+ * claim — the gem has a writer per record type and no factory.
  */
 class Writer {
   /**
@@ -23,19 +28,17 @@ class Writer {
   /**
    * Builds a payload and sends it via the appropriate writer.
    *
-   * @param {object} opts
-   * @param {string} opts.message
-   * @param {Error|null} [opts.error]
-   * @param {number} opts.status
-   * @param {object} [opts.headers]
-   * @param {string|null} [opts.path]
-   * @param {string|null} [opts.action]
-   * @param {string|null} [opts.version]
-   * @param {Date} [opts.sentAt]
+   * `opts` is handed to {@link PayloadBuilder.build} whole rather than
+   * relisted here. Relisting it is how `stacktrace` came to be silently
+   * dropped: the builder has always accepted a caller-supplied trace, and this
+   * method destructured every option except that one, so passing it did
+   * nothing. A second copy of the option list is a second thing to drift.
+   *
+   * @param {object} opts - See {@link PayloadBuilder.build}.
    * @returns {Promise<void>}
    */
-  async write({ message, error, status, headers, path, action, version, sentAt }) {
-    const payload = PayloadBuilder.build({ message, error, status, headers, path, action, version, sentAt });
+  async write(opts) {
+    const payload = PayloadBuilder.build(opts);
     await this._getWriter().write([payload]);
   }
 

@@ -1,5 +1,89 @@
 # Changelog
 
+## 0.10.0
+
+### Fixed
+
+- **The exported `PayloadBuilder` built a row intake refuses.** It sent no
+  `uuid`, and intake's `ApplicationError` changeset ends
+  `validate_required([:message, :uuid, :app_name, :sent_at])`
+  (`intake/lib/intake/errors/application_error.ex:46`), so every error report
+  built through it was rejected on arrival. `writers/exception-writer.js` — the
+  path the Express middleware uses — has always sent one, so applications using
+  the middleware were never affected. `package.json` exports `./src/*`, so the
+  builder is a documented way in, and it is the one an integrator reaches for
+  when they are not running the middleware.
+
+  Until this week the rejection was invisible: intake's error controller
+  answered `201 Created` whatever became of the rows. Since sc-310 a batch of
+  nothing but rejected rows answers **422**, so a caller on 0.9.0 sees the
+  refusal rather than silence. That is a change in what you can see, not in
+  what was stored — nothing built this way has ever been stored.
+
+- **Eight of the twelve keys it sent were dropped as unknown.**
+  `application_error_controller.ex`'s `build_attrs/2` is an explicit allowlist;
+  a key it does not name never reaches the changeset. Two of the eight had
+  somewhere to go and were renamed; the other six have no column on
+  `application_errors` at all, and what they carry is already recorded on the
+  request and response rows for the same call, which the `uuid` joins to.
+
+  | key sent before | what happens to it now |
+  | --- | --- |
+  | `path` | sent as `stamped_path`, which intake reads |
+  | `action` | sent as `stamped_http_method`, which intake reads |
+  | `url` | dropped; `application_requests` records `scheme`/`host`/`port`/`path` |
+  | `request` | dropped; `application_requests` records it as `request` |
+  | `request_headers` | dropped; `application_requests` records them as `headers` |
+  | `endpoint_version` | dropped; `application_requests` records it |
+  | `status` | dropped; `application_responses` records it |
+  | `env` | dropped; intake derives an environment from the credential (sc-321) |
+
+  The payload is now exactly what `build_attrs/2` reads, less the two fields
+  intake fills in itself — `stack_hash`, computed server-side from the trace,
+  and `target_application_environment_id`, stamped from the credential.
+
+- **`Writer.write` silently discarded a caller-supplied `stacktrace`.** It
+  relisted the builder's options and destructured them one at a time, and that
+  list had drifted from the builder's: `stacktrace` was missing from it, so
+  passing one did nothing. `opts` now goes through whole.
+
+### Added
+
+- `PayloadBuilder.build` accepts a `uuid`, for a caller carrying its own
+  correlation id — an inbound `X-Request-Id`, say. When it is not given, the id
+  is the one `RequestStore.run` minted for the request in flight, which is the
+  same value `RequestWriter`, `ResponseWriter` and `ExceptionWriter` send and
+  what joins the error row to the request and response rows for that call.
+- Outside a request the builder mints an id rather than sending `null`.
+  `ExceptionWriter` sends `null` there, and a `null` is a refused row; building
+  outside a request is the normal case for a caller reaching for this module
+  directly. An id that correlates with nothing still records the error.
+- `source_application_environment_id` is now sent, matching `ExceptionWriter`.
+  Intake reads it and previously stored nil on every row built here.
+
+### Changed
+
+- Errors reported through `PayloadBuilder`/`Writer` are stored for the first
+  time. Anything reading `application_errors` — the error views, the
+  notification fan-out — sees rows from these callers that it has never seen
+  before. Rows are not backfilled; nothing was written to backfill from.
+- Two of the six dropped keys, `request` and `request_headers`, were the ones
+  carrying caller data, and this module never applied the configured masking
+  rules to them the way the writers do. Not sending them removes that exposure;
+  the masking gap on the one remaining field, `message`, is filed separately.
+
+### Unchanged
+
+- `PayloadBuilder.build` and `Writer.write` keep their signatures. `status`,
+  `headers` and `version` are still accepted so existing calls keep working —
+  they are simply not sent, as in practice they never were: intake dropped all
+  three on arrival.
+- `writers/exception-writer.js`, and therefore the Express middleware, is
+  untouched. It has sent `uuid`, `stamped_path`, `stamped_http_method` and
+  `source_application_environment_id` since it was written; this release brings
+  the builder into line with it rather than the other way around.
+- `SessionConfiguration` is still exported. No payload uses it any more.
+
 ## 0.9.0
 
 ### Fixed
