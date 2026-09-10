@@ -30,13 +30,13 @@ describe('Writer', () => {
   });
 
   test('sends a built payload to the endpoint named by its URL key', async () => {
-    // `endpointErrorUrl` is the caller's choice, not this class's. Note that
-    // intake serves no `/api/endpoint_errors` route — the error ingest that
-    // exists is `applicationErrorsUrl`, and that is the contract
-    // `PayloadBuilder` builds for.
-    await new Writer('endpointErrorUrl').write({ message: 'boom' });
+    // The URL key is the caller's choice, not this class's: `Writer` forwards
+    // whatever key it was handed to the underlying writer. `logUrl` resolves
+    // off `logBaseUrl`, so a wrong key would be visible in the host as well as
+    // the path.
+    await new Writer('logUrl').write({ message: 'boom' });
 
-    expect(post.mock.calls[0][0]).toBe('https://epb.test/api/endpoint_errors');
+    expect(post.mock.calls[0][0]).toBe('https://log.epb.test/api/application_logs');
   });
 
   test('reports the message and the route it was given', async () => {

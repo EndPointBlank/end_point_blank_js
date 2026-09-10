@@ -6,7 +6,6 @@ const { post } = require('../commands/_http');
 
 const URL_RESOLVERS = {
   applicationErrorsUrl: () => config.applicationErrorsUrl,
-  endpointErrorUrl: () => config.endpointErrorUrl,
   logUrl: () => config.logUrl,
   requestsUrl: () => config.requestsUrl,
   responsesUrl: () => config.responsesUrl,
@@ -19,7 +18,8 @@ const URL_RESOLVERS = {
  */
 class DirectWriter {
   /**
-   * @param {string} urlKey - One of `'applicationErrorsUrl'`, `'endpointErrorUrl'`, `'logUrl'`.
+   * @param {string} urlKey - One of `'applicationErrorsUrl'`, `'logUrl'`,
+   *   `'requestsUrl'`, `'responsesUrl'`.
    */
   constructor(urlKey) {
     const resolver = URL_RESOLVERS[urlKey] ?? URL_RESOLVERS.applicationErrorsUrl;
