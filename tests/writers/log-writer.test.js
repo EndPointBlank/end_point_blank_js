@@ -7,6 +7,9 @@ const { instance: config, LogMode } = require('../../src/configuration');
 const { RequestStore } = require('../../src/request-store');
 const { LogWriter } = require('../../src/writers/log-writer');
 
+// Same matcher `ExceptionWriter`'s tests use for its minted-uuid fallback.
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 describe('LogWriter', () => {
   // The payload as it goes over the wire, unwrapped from the batch envelope.
   const sentPayload = () => post.mock.calls[0][2].payload[0];
@@ -87,24 +90,35 @@ describe('LogWriter', () => {
       });
     });
 
-    test('adopts the caller\'s request id so logs correlate across services', async () => {
-      await RequestStore.run(req, () => LogWriter.info('hello'));
+    test('correlates with the request being served, not the caller\'s inbound id', async () => {
+      // Same source as `RequestWriter`/`ResponseWriter`/`ExceptionWriter`, so
+      // all four rows for one interaction join on the same uuid. `req` here
+      // still carries an inbound `x-request-id` header on purpose: this test
+      // proves the log row no longer adopts it, which is the sc-380 fix.
+      let expected;
 
-      expect(sentPayload().uuid).toBe('req-abc');
+      await RequestStore.run(req, async () => {
+        expected = RequestStore.getUuid();
+        await LogWriter.info('hello');
+      });
+
+      expect(sentPayload().uuid).toBe(expected);
+      expect(sentPayload().uuid).not.toBe('req-abc');
     });
 
-    test('falls back to the framework request id', async () => {
-      await RequestStore.run({ path: '/x', method: 'GET', id: 'express-1' }, () =>
-        LogWriter.info('hello'),
-      );
+    test('carries the same id a response for the same request would carry', async () => {
+      // The whole point of the fix: a log row and a response row for the same
+      // request must share a uuid so the portal can join them.
+      let logUuid;
+      let storeUuid;
 
-      expect(sentPayload().uuid).toBe('express-1');
-    });
+      await RequestStore.run(req, async () => {
+        await LogWriter.info('hello');
+        logUuid = post.mock.calls[0][2].payload[0].uuid;
+        storeUuid = RequestStore.getUuid();
+      });
 
-    test('sends a null id when the request has none', async () => {
-      await RequestStore.run({ path: '/x', method: 'GET' }, () => LogWriter.info('hello'));
-
-      expect(sentPayload().uuid).toBeNull();
+      expect(logUuid).toBe(storeUuid);
     });
 
     test('falls back to the full URL when the framework exposes no path', async () => {
@@ -133,11 +147,27 @@ describe('LogWriter', () => {
       expect(sentPayload().message).toBe('worker started');
     });
 
-    test('leaves the request-scoped fields out rather than guessing', async () => {
+    test('leaves the request-scoped stamps out rather than guessing', async () => {
       await LogWriter.info('worker started');
 
       expect(sentPayload()).not.toHaveProperty('stamped_path');
-      expect(sentPayload().uuid).toBeNull();
+    });
+
+    test('still carries a minted id, because a log call outside a request is exactly as possible as an exception one', async () => {
+      // Same reasoning as `ExceptionWriter` under sc-353: `RequestStore.getUuid()`
+      // answers null outside a request, and a null log row would be no more
+      // correlated than a minted one -- it would just carry no id at all. See sc-380.
+      await LogWriter.info('worker started');
+
+      expect(sentPayload().uuid).toMatch(UUID_V4);
+    });
+
+    test('mints a fresh id per entry, so unrelated log lines do not look correlated', async () => {
+      await LogWriter.info('first');
+      await LogWriter.info('second');
+
+      const [first, second] = post.mock.calls.map(call => call[2].payload[0].uuid);
+      expect(first).not.toBe(second);
     });
   });
 
