@@ -59,6 +59,33 @@ const emptyResponse = (status = 201) => ({
 
 const DEPRECATION = { deprecated_at: '2026-01-01T00:00:00Z', sunset_at: '2026-11-11T11:11:11Z' };
 
+const SOURCE_ENV_ID = '22222222-2222-4222-8222-222222222222';
+
+// Intake's 201 for a granted authorize. `AuthorizationController.create/2`
+// renders `:show, accesses: [access_map]`, and `AuthorizationJSON.show/1` puts
+// that list under `data` -- one grant, with exactly these four keys -- adding
+// `deprecation` only when the called version is deprecated (intake
+// `lib/intake_web/controllers/authorization_json.ex`, pinned by
+// `authorization_controller_test.exs`, "POST /api/authorize — authorized"). The
+// field names are intake's; the values are stand-ins.
+//
+// Every 201 here is built from this. The default used to be
+// `{ authorized: true }` with no `data`, which is how this command reading only
+// `deprecation` -- and never the caller's source environment -- passed its own
+// suite (sc-473).
+const intakeGrant = ({ sourceEnvId = SOURCE_ENV_ID, deprecation } = {}) => ({
+  authorized: true,
+  data: [
+    {
+      id: '11111111-1111-4111-8111-111111111111',
+      source_application_environment_id: sourceEnvId,
+      target_application_environment_id: '33333333-3333-4333-8333-333333333333',
+      inserted_at: '2026-09-10T00:00:00Z',
+    },
+  ],
+  ...(deprecation ? { deprecation } : {}),
+});
+
 describe('EndpointAuthorize.authorize', () => {
   let api;
 
@@ -69,9 +96,10 @@ describe('EndpointAuthorize.authorize', () => {
   });
 
   // Resolves once the authorize call has finished *and* the per-request store
-  // has been read, since the deprecation (and the uuid) only exist inside the
-  // request context -- RequestStore.getUuid() outside of RequestStore.run()
-  // returns null, so it has to be captured here, before the promise settles.
+  // has been read, since the deprecation, the source environment and the uuid
+  // only exist inside the request context -- RequestStore.getUuid() outside of
+  // RequestStore.run() returns null, so they have to be captured here, before
+  // the promise settles.
   const authorize = (request, path = '/students', version = '1') =>
     new Promise((resolve, reject) => {
       RequestStore.run(request, async () => {
@@ -80,6 +108,7 @@ describe('EndpointAuthorize.authorize', () => {
           resolve({
             response,
             deprecation: RequestStore.getDeprecation(),
+            sourceEnvId: RequestStore.getSourceApplicationEnvironmentId(),
             uuid: RequestStore.getUuid(),
           });
         } catch (err) {
@@ -114,7 +143,7 @@ describe('EndpointAuthorize.authorize', () => {
       api.calls.authorize.push({ authHeader, body });
       return api.authorizeQueue.length
         ? api.authorizeQueue.shift()
-        : jsonResponse(201, { authorized: true });
+        : jsonResponse(201, intakeGrant());
     });
 
     jest.spyOn(console, 'info').mockImplementation(() => {});
@@ -233,7 +262,7 @@ describe('EndpointAuthorize.authorize', () => {
       // Authorization is cached per client and route, so a marker-only cache
       // would limit the Deprecation header to cache misses — roughly one
       // request in N, which reads as a flaky feature rather than a missing one.
-      api.authorizeQueue.push(jsonResponse(201, { authorized: true, deprecation: DEPRECATION }));
+      api.authorizeQueue.push(jsonResponse(201, intakeGrant({ deprecation: DEPRECATION })));
 
       const first = await authorize(req(), '/students', '1');
       const second = await authorize(req(), '/students', '1');
@@ -312,7 +341,7 @@ describe('EndpointAuthorize.authorize', () => {
 
   describe('the deprecation block', () => {
     test('is taken from the authorize response', async () => {
-      api.authorizeQueue.push(jsonResponse(201, { authorized: true, deprecation: DEPRECATION }));
+      api.authorizeQueue.push(jsonResponse(201, intakeGrant({ deprecation: DEPRECATION })));
 
       const { deprecation } = await authorize(req());
 
@@ -347,14 +376,96 @@ describe('EndpointAuthorize.authorize', () => {
     test('leaves the response body readable by the caller', async () => {
       // A `fetch` body can only be consumed once. Reading it here to extract
       // the deprecation must not drain it for the middleware downstream.
-      api.authorizeQueue.push(jsonResponse(201, { authorized: true, deprecation: DEPRECATION }));
+      api.authorizeQueue.push(jsonResponse(201, intakeGrant({ deprecation: DEPRECATION })));
 
       const { response } = await authorize(req());
 
-      await expect(response.json()).resolves.toEqual({
-        authorized: true,
-        deprecation: DEPRECATION,
-      });
+      await expect(response.json()).resolves.toEqual(intakeGrant({ deprecation: DEPRECATION }));
+    });
+  });
+
+  describe('the source application environment id', () => {
+    // The response, log and error writers attach this id, intake stores it on
+    // each row, and app_portal's error page maps it to the "Client" that made
+    // the call. Null blanks that row for every error this SDK reports.
+
+    test('is taken from the grant intake answers with', async () => {
+      const { sourceEnvId } = await authorize(req());
+
+      expect(sourceEnvId).toBe(SOURCE_ENV_ID);
+    });
+
+    test('is replayed on every cache hit, not just the first', async () => {
+      // The same trap the deprecation fell into: a cache that holds only the
+      // deprecation block would record the caller on one request in N.
+      api.authorizeQueue.push(jsonResponse(201, intakeGrant({ deprecation: DEPRECATION })));
+
+      const first = await authorize(req(), '/students', '1');
+      const second = await authorize(req(), '/students', '1');
+      const third = await authorize(req(), '/students', '1');
+
+      expect(api.calls.authorize).toHaveLength(1);
+      for (const hit of [first, second, third]) {
+        expect(hit.sourceEnvId).toBe(SOURCE_ENV_ID);
+        expect(hit.deprecation).toEqual(DEPRECATION);
+      }
+    });
+
+    test('on a cache hit is the id of the caller whose authorization was cached', async () => {
+      api.authorizeQueue.push(jsonResponse(201, intakeGrant({ sourceEnvId: 'env-alice' })));
+      api.authorizeQueue.push(jsonResponse(201, intakeGrant({ sourceEnvId: 'env-bob' })));
+      const alice = req({ headers: { authorization: 'Basic YWxpY2U=' } });
+      const bob = req({ headers: { authorization: 'Basic Ym9i' } });
+
+      await authorize(alice);
+      await authorize(bob);
+      const aliceAgain = await authorize(alice);
+      const bobAgain = await authorize(bob);
+
+      expect(api.calls.authorize).toHaveLength(2);
+      expect(aliceAgain.sourceEnvId).toBe('env-alice');
+      expect(bobAgain.sourceEnvId).toBe('env-bob');
+    });
+
+    test('a 201 that names no source environment still authorizes, but says so loudly', async () => {
+      // Intake refuses (401) any caller whose credential has no application
+      // environment, so a 201 without the id means the response contract moved
+      // -- exactly what sc-473 was, silently. Refusing would turn lost
+      // attribution into an outage of legitimate traffic, so the call proceeds,
+      // but it must not pass for success. Once per cache miss, not per hit.
+      api.authorizeQueue.push(jsonResponse(201, { authorized: true, data: [] }));
+
+      const first = await authorize(req(), '/students', '1');
+      const second = await authorize(req(), '/students', '1');
+
+      expect(first.response.status).toBe(201);
+      expect(second.response.status).toBe(201);
+      expect(first.sourceEnvId).toBeNull();
+      expect(second.sourceEnvId).toBeNull();
+
+      const complaints = console.error.mock.calls
+        .map(args => args.join(' '))
+        .filter(line => line.includes('source_application_environment_id'));
+      expect(complaints).toHaveLength(1);
+    });
+
+    test('a 201 with no body at all says so too', async () => {
+      api.authorizeQueue.push(emptyResponse(201));
+
+      const { response, sourceEnvId } = await authorize(req());
+
+      expect(response.status).toBe(201);
+      expect(sourceEnvId).toBeNull();
+      expect(console.error.mock.calls.map(args => args.join(' ')).join('\n'))
+        .toMatch(/source_application_environment_id/);
+    });
+
+    test('is not recorded for a refused request', async () => {
+      api.authorizeQueue.push(jsonResponse(403, { error: 'denied' }));
+
+      const { sourceEnvId } = await authorize(req());
+
+      expect(sourceEnvId).toBeNull();
     });
   });
 
