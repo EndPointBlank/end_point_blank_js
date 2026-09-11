@@ -43,6 +43,9 @@ const RequestStore = {
   /**
    * Stores the source application environment ID for the current async context.
    *
+   * Set by `EndpointAuthorize` from intake's grant, on a cache hit as well as a
+   * miss, and read by the response, log and error writers.
+   *
    * @param {string|null} id
    */
   setSourceApplicationEnvironmentId(id) {

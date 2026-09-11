@@ -25,6 +25,15 @@ const { RequestStore } = require('../src/request-store');
 describe('auth cache keys are per endpoint version', () => {
   const req = { headers: { authorization: 'Basic Y2xpZW50' }, method: 'GET', host: 'localhost' };
 
+  // Intake's granted body (`AuthorizationJSON.show/1`). An empty `data` would be
+  // a 201 that names no caller, which the command now logs as an error.
+  const grant = {
+    id: '11111111-1111-4111-8111-111111111111',
+    source_application_environment_id: '22222222-2222-4222-8222-222222222222',
+    target_application_environment_id: '33333333-3333-4333-8333-333333333333',
+    inserted_at: '2026-09-10T00:00:00Z',
+  };
+
   const responseFor = version => ({
     status: 201,
     ok: true,
@@ -33,8 +42,8 @@ describe('auth cache keys are per endpoint version', () => {
     },
     json: async () =>
       version === '1'
-        ? { authorized: true, data: [], deprecation: { deprecated_at: '2026-01-01T00:00:00Z' } }
-        : { authorized: true, data: [] },
+        ? { authorized: true, data: [grant], deprecation: { deprecated_at: '2026-01-01T00:00:00Z' } }
+        : { authorized: true, data: [grant] },
   });
 
   beforeEach(() => {

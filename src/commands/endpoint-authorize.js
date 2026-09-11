@@ -8,11 +8,6 @@ const { RequestStore } = require('../request-store');
 const { resolveHostname } = require('../base-url');
 const log = require('../log');
 
-// The cache declines to store falsy values, so "authorized, not deprecated"
-// needs a truthy marker of its own — otherwise every such request would miss
-// the cache and re-authorize.
-const NO_DEPRECATION = Object.freeze({ none: true });
-
 /**
  * Authorizes an incoming request by sending its details to the EndPointBlank
  * authorize API.
@@ -37,14 +32,21 @@ const EndpointAuthorize = {
     // it, two callers on different versions of the same route share one entry.
     const cacheKey = `epb_auth:${clientAuth}:${path}:${method}:${config.appName}:${version}`;
 
-    if (authCache.exists(cacheKey)) {
-      // The cached value is the deprecation block (or null), not a truthy
-      // marker. Authorization is cached per client+route, so caching a marker
-      // would limit the Deprecation and Sunset headers to cache misses —
-      // roughly one request in N, which reads as a flaky feature rather than a
-      // missing one.
-      const cached = authCache.retrieve(cacheKey);
-      RequestStore.setDeprecation(cached === NO_DEPRECATION ? null : (cached ?? null));
+    // A hit replays everything the grant said about this call: the caller's
+    // source environment and the deprecation block, either of which may be
+    // null. Authorization is cached per client+route, so anything a hit left
+    // out would reach cache misses only — roughly one request in N. That is how
+    // the Deprecation and Sunset headers once read as a flaky feature, and the
+    // source environment would have gone the same way had only misses recorded
+    // it (sc-473).
+    //
+    // The entry is always an object, so the cache (which declines falsy values)
+    // always stores it, and one `retrieve` both finds and reads it — there is
+    // no separate `exists` check for an expiry to land between.
+    const cached = authCache.retrieve(cacheKey);
+    if (cached) {
+      RequestStore.setSourceApplicationEnvironmentId(cached.sourceApplicationEnvironmentId);
+      RequestStore.setDeprecation(cached.deprecation);
       return { status: 201, ok: true };
     }
 
@@ -77,9 +79,10 @@ const EndpointAuthorize = {
       // and `response` is a fetch Response whose body can only be consumed once
       // — so parsing it later in the middleware would leave the caller with a
       // drained stream.
-      const deprecation = await deprecationFrom(response);
-      RequestStore.setDeprecation(deprecation);
-      authCache.store(cacheKey, deprecation ?? NO_DEPRECATION);
+      const grant = await grantFrom(response);
+      RequestStore.setSourceApplicationEnvironmentId(grant.sourceApplicationEnvironmentId);
+      RequestStore.setDeprecation(grant.deprecation);
+      authCache.store(cacheKey, grant);
     } else if (response.status > 299) {
       // Clone before reading, for the same reason the 201 path does: a fetch
       // Response body can only be consumed once, and `authorized.js` reads this
@@ -96,24 +99,55 @@ const EndpointAuthorize = {
 };
 
 /**
- * The authorize response carries a `deprecation` block only when the version
- * being called is deprecated. Absent, malformed, or unparseable all mean the
- * same thing here: nothing to say.
+ * What intake's 201 says about this call.
+ *
+ * Intake renders the grant under `data` (`AuthorizationJSON.show/1`): one
+ * entry naming the caller's `source_application_environment_id`. The
+ * response, log and error writers attach that id, intake stores it on each
+ * row, and app_portal's error page maps it to the "Client" that made the call.
+ * This used to read only `deprecation`, so the id was null on every request
+ * and that row read "—" for every error this SDK reported (sc-473). Rails
+ * reads the same key, `data[0].source_application_environment_id`.
+ *
+ * A 201 without the id still authorizes. Intake refuses (401) any caller whose
+ * credential has no application environment, so a missing id means the
+ * response contract moved — and refusing would turn lost attribution into an
+ * outage of legitimate traffic. But it is logged, once per cache miss, rather
+ * than recorded as null in silence.
+ *
+ * The `deprecation` block is present only when the version being called is
+ * deprecated. Absent, malformed, or unparseable all mean the same thing for
+ * it: nothing to say.
  *
  * Clones the response before reading so the caller's body stays consumable —
  * `authorized.js` reads it on the failure path.
  *
  * @param {Response} response
- * @returns {Promise<object|null>}
+ * @returns {Promise<{sourceApplicationEnvironmentId: string|null, deprecation: object|null}>}
  */
-async function deprecationFrom(response) {
+async function grantFrom(response) {
+  let body = null;
+  let unreadable = null;
   try {
     const source = typeof response.clone === 'function' ? response.clone() : response;
-    const body = await source.json();
-    return body?.deprecation ?? null;
-  } catch {
-    return null;
+    body = await source.json();
+  } catch (err) {
+    unreadable = err;
   }
+
+  const id = body?.data?.[0]?.source_application_environment_id;
+  const sourceApplicationEnvironmentId = typeof id === 'string' && id !== '' ? id : null;
+
+  if (sourceApplicationEnvironmentId === null) {
+    const seen = unreadable ? `an unreadable body (${unreadable.message})` : `body=${JSON.stringify(body)}`;
+    console.error(
+      '[EndPointBlank] Authorized, but the authorize response has no ' +
+        'data[0].source_application_environment_id, so the responses, logs and errors ' +
+        `this request writes will not name their caller: ${seen}`,
+    );
+  }
+
+  return { sourceApplicationEnvironmentId, deprecation: body?.deprecation ?? null };
 }
 
 function remoteAddr(req) {
