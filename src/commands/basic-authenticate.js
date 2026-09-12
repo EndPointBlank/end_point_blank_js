@@ -4,6 +4,7 @@ const { instance: config } = require('../configuration');
 const { Authorization } = require('../authorization');
 const { post } = require('./_http');
 const log = require('../log');
+const { RequestStore } = require('../request-store');
 
 /**
  * Authenticates an incoming request by sending its details to the EndPointBlank
@@ -60,6 +61,10 @@ const BasicAuthenticate = {
     if (!response) return null;
 
     log.info(`[EndPointBlank] Authentication response: ${response.status}`);
+    if (response.status === 201) {
+      const sourceApplicationEnvironmentId = await sourceEnvironmentIdFrom(response);
+      RequestStore.setSourceApplicationEnvironmentId(sourceApplicationEnvironmentId);
+    }
     if (response.status > 299) {
       // Clone before reading, exactly as `EndpointAuthorize` does. A fetch
       // Response body can only be consumed once, and `authenticated.js` reads
@@ -78,6 +83,31 @@ const BasicAuthenticate = {
     return response;
   },
 };
+
+async function sourceEnvironmentIdFrom(response) {
+  let body = null;
+  try {
+    const source = typeof response.clone === 'function' ? response.clone() : response;
+    body = await source.json();
+  } catch (err) {
+    console.error(
+      '[EndPointBlank] Authenticated, but the authorize response has no ' +
+        'data[0].source_application_environment_id, so this request\'s responses, ' +
+        `logs and errors will not name their caller: ${err.message}`,
+    );
+    return null;
+  }
+
+  const id = body?.data?.[0]?.source_application_environment_id;
+  if (typeof id === 'string' && id !== '') return id;
+
+  console.error(
+    '[EndPointBlank] Authenticated, but the authorize response has no ' +
+      'data[0].source_application_environment_id, so this request\'s responses, ' +
+      `logs and errors will not name their caller: body=${JSON.stringify(body)}`,
+  );
+  return null;
+}
 
 function remoteAddr(req) {
   const forwarded = req.headers?.['x-forwarded-for'];
