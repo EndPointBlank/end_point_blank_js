@@ -5,6 +5,7 @@ jest.mock('../../src/commands/_http', () => ({ post: jest.fn() }));
 const { post } = require('../../src/commands/_http');
 const { instance: config } = require('../../src/configuration');
 const { BasicAuthenticate } = require('../../src/commands/basic-authenticate');
+const { RequestStore } = require('../../src/request-store');
 
 describe('BasicAuthenticate.authenticate', () => {
   const req = (overrides = {}) => ({
@@ -15,6 +16,12 @@ describe('BasicAuthenticate.authenticate', () => {
   });
 
   const okResponse = { status: 201, ok: true };
+
+  const grantResponse = (id) => ({
+    status: 201,
+    ok: true,
+    clone: () => ({ json: async () => ({ data: [{ source_application_environment_id: id }] }) }),
+  });
 
   const bodySent = () => post.mock.calls[0][2];
 
@@ -146,6 +153,16 @@ describe('BasicAuthenticate.authenticate', () => {
   });
 
   describe('the answer it returns', () => {
+    test('records the granted source environment for the current request', async () => {
+      post.mockResolvedValue(grantResponse('source-env-123'));
+
+      await RequestStore.run(req(), async () => {
+        await BasicAuthenticate.authenticate(req(), '/students', '1');
+
+        expect(RequestStore.getSourceApplicationEnvironmentId()).toBe('source-env-123');
+      });
+    });
+
     test('hands back the service response on success', async () => {
       await expect(BasicAuthenticate.authenticate(req(), '/students', '1')).resolves.toBe(okResponse);
     });
