@@ -9,10 +9,13 @@ const LogMode = Object.freeze({
 });
 
 /**
- * Thrown when a configured value can never produce a working URL.
+ * Thrown when the library is configured in a way that can never work.
  *
- * Raised eagerly, the first time the value is read -- not by `configure()`
- * itself, which never validates -- rather than left to fail silently later:
+ * `configure()` throws it for an unknown key, before applying anything.
+ *
+ * It is also thrown when a configured value can never produce a working URL.
+ * That check runs the first time the value is read -- `configure()` does not
+ * validate values -- rather than being left to fail silently later:
  * every write built from a misconfigured `baseUrl` or `logBaseUrl` would
  * otherwise 404, and `DirectWriter` only warning-logs a failed write, so
  * nothing would ever surface the mistake to an operator.

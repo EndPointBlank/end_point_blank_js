@@ -58,6 +58,11 @@ Call `configure({...})` once, typically at application boot. Every option is opt
 keys you pass are updated, and calling `configure` again merges into the existing configuration
 (it does not reset unspecified keys).
 
+A key that is not in the table below makes `configure` throw a `ConfigurationError` naming the
+unknown key(s) and listing the valid ones, and nothing from that call is applied. This includes an
+unknown key whose value is `undefined`. A typo such as `clientSecert` fails at boot instead of
+leaving the app running without credentials.
+
 Several settings fall back to an `ENDPOINTBLANK_*` environment variable when not explicitly
 configured, then to a built-in default. **Precedence: explicit `configure()` value > environment
 variable > default.**
