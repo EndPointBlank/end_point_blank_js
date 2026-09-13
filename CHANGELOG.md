@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Behaviour change: `configure` now throws on an unknown key.** It used to
+  iterate its own list of valid keys and ignore everything else in `opts`, so a
+  typo was dropped without a word. `clientSecert` left the app running with no
+  secret. `baseUri` left it reporting to the production default,
+  `https://in.endpointblank.com`. Now any key outside the valid set throws a
+  `ConfigurationError` that names every unknown key and lists the valid ones.
+
+  The call is atomic: if any key is unknown, none of the others are applied
+  either. An unknown key throws even when its value is `undefined`, because
+  `{ clientSecert: process.env.EPB_SECRET }` is still a typo when the variable
+  happens to be unset.
+
+  **Migration:** a `configure` call that passes a key outside the table in the
+  README's Configuration section will now throw at boot. Fix the spelling, or
+  drop the key. `ConfigurationError` is exported from the package root.
+
+  This matches the other SDKs: Python raises `TypeError`, Rails raises
+  `NoMethodError`, and Elixir raises `ArgumentError`
+  (EndPointBlank/end_point_blank_elixir#39).
+
 ## 0.11.0
 
 ### Fixed

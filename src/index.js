@@ -34,11 +34,24 @@ const { UnauthorizedError } = require('./unauthorized-error');
 const { VERSION } = require('./version');
 const { TokenOutcome } = require('./commands/generate-access-token');
 
+const CONFIGURE_KEYS = Object.freeze([
+  'clientId', 'clientSecret', 'baseUrl', 'logBaseUrl', 'environment', 'appName',
+  'workerCount', 'logMode', 'versionFinder', 'applicationVersion',
+  'tokenTtl', 'cacheTtl', 'trustProxyHeaders', 'maskingRules', 'maskHook',
+]);
+
 /**
  * Configure the EndPointBlank library.
  *
  * All properties are optional; only supplied values are updated.
  *
+ * Throws {@link ConfigurationError} if `opts` contains any key not in
+ * `CONFIGURE_KEYS`, and applies nothing in that case. A typo such as
+ * `clientSecert` or `baseUri` would otherwise leave the app running with no
+ * credentials, or pointed at the production default, with nothing to say so.
+ *
+ * @throws {ConfigurationError} if any key in `opts` is unknown
+
  * @param {object} opts
  * @param {string} [opts.clientId]
  * @param {string} [opts.clientSecret]
@@ -54,12 +67,15 @@ const { TokenOutcome } = require('./commands/generate-access-token');
  * @param {number} [opts.cacheTtl] - Seconds (default: 300)
  */
 function configure(opts = {}) {
-  const allowed = [
-    'clientId', 'clientSecret', 'baseUrl', 'logBaseUrl', 'environment', 'appName',
-    'workerCount', 'logMode', 'versionFinder', 'applicationVersion',
-    'tokenTtl', 'cacheTtl', 'trustProxyHeaders', 'maskingRules', 'maskHook',
-  ];
-  for (const key of allowed) {
+  // Checked in full before anything is assigned, so a bad call changes nothing.
+  const unknown = Object.keys(opts).filter((key) => !CONFIGURE_KEYS.includes(key));
+  if (unknown.length > 0) {
+    throw new ConfigurationError(
+      `configure() received unknown key(s): ${unknown.join(', ')}. ` +
+      `Valid keys are: ${CONFIGURE_KEYS.join(', ')}. No configuration was applied.`
+    );
+  }
+  for (const key of CONFIGURE_KEYS) {
     if (opts[key] !== undefined) {
       config[key] = opts[key];
     }

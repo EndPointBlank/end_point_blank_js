@@ -38,6 +38,67 @@ test('configure sets maskingRules and maskHook', () => {
   expect(config.maskHook).toBe(hook);
 });
 
+describe('configure refuses unknown keys', () => {
+  // Written out here rather than imported from src, so a key silently dropped
+  // from the implementation's list fails these tests instead of agreeing with it.
+  const VALID_KEYS = [
+    'clientId', 'clientSecret', 'baseUrl', 'logBaseUrl', 'environment', 'appName',
+    'workerCount', 'logMode', 'versionFinder', 'applicationVersion',
+    'tokenTtl', 'cacheTtl', 'trustProxyHeaders', 'maskingRules', 'maskHook',
+  ];
+
+  const thrownBy = (fn) => {
+    try {
+      fn();
+    } catch (err) {
+      return err;
+    }
+    throw new Error('expected configure to throw, but it returned');
+  };
+
+  test('a misspelled key throws a ConfigurationError naming it', () => {
+    const err = thrownBy(() => epb.configure({ clientSecert: 'my-secret' }));
+    expect(err).toBeInstanceOf(ConfigurationError);
+    expect(err).toBeInstanceOf(epb.ConfigurationError);
+    expect(err.message).toContain('clientSecert');
+  });
+
+  test('the message lists every valid key', () => {
+    const err = thrownBy(() => epb.configure({ baseUri: 'https://staging.example.com' }));
+    for (const key of VALID_KEYS) {
+      expect(err.message).toContain(key);
+    }
+  });
+
+  test('every unknown key is named, not just the first', () => {
+    const err = thrownBy(() => epb.configure({ baseUri: 'x', clientSecert: 'y', appname: 'z' }));
+    expect(err.message).toContain('baseUri');
+    expect(err.message).toContain('clientSecert');
+    expect(err.message).toContain('appname');
+  });
+
+  test('nothing is applied when any key is unknown', () => {
+    expect(() => epb.configure({
+      clientId: 'my-id',
+      baseUrl: 'https://staging.example.com',
+      clientSecert: 'my-secret',
+    })).toThrow(ConfigurationError);
+    expect(config.clientId).toBeNull();
+    expect(config.baseUrl).toBe('https://in.endpointblank.com');
+  });
+
+  test('an unknown key throws even when its value is undefined', () => {
+    // `{ clientSecert: process.env.EPB_SECRET }` is still a typo when the
+    // variable happens to be unset.
+    expect(() => epb.configure({ clientSecert: undefined })).toThrow(ConfigurationError);
+  });
+
+  test('every valid key is accepted', () => {
+    const opts = Object.fromEntries(VALID_KEYS.map((key) => [key, null]));
+    expect(() => epb.configure(opts)).not.toThrow();
+  });
+});
+
 test('default base urls', () => {
   expect(config.baseUrl).toBe('https://in.endpointblank.com');
   expect(config.logBaseUrl).toBe('https://log.endpointblank.com');
