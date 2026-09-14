@@ -22,13 +22,23 @@
   an old entry's dwindling remaining-time-to-original-expiry can coincidentally
   fall back under a new, shorter window and look valid again.
 
-  **`cache_ttl <= 0` now disables the cache and clears it — new behavior.**
-  Previously `cache_ttl <= 0` did nothing at all: entries kept being written
-  and read normally. Now, once disabled, every read is a miss and deletes the
-  entry outright (not merely hides it), and `store()` inserts nothing while
-  disabled — so re-enabling the cache afterward cannot resurrect an entry an
-  operator disabled the cache specifically to flush. Matches the Elixir SDK's
-  `AuthCache` (sc-660).
+  **`cache_ttl <= 0` now disables the cache — new behavior.** Previously
+  `cache_ttl <= 0` did nothing at all: entries kept being written and read
+  normally. Now, the next `retrieve`/`exists`/`store` call that runs while
+  disabled is a miss (a store also inserts nothing) **and clears the entire
+  cache** — every entry, not only the key that call looked up or wrote —
+  matching the Elixir SDK's `AuthCache` (sc-660), which wipes its whole table
+  on any `get`/`put` made while disabled.
+
+  **Known residual, same as Elixir's:** the clear is triggered by a cache
+  call observing the disabled state, not by `configure()` itself. Calling
+  `configure({ cacheTtl: 0 })` and then `configure({ cacheTtl: 300 })` back
+  to back, with no cache lookup or write while disabled, flushes nothing —
+  every entry, including one an operator meant to force out, keeps answering
+  until its original expiry. (An earlier draft of this entry said disabling
+  clears everything unconditionally; that was true only once *something* ran
+  while disabled, and shipped a README/CHANGELOG mismatch caught in review —
+  see js#50.)
 
   No configuration surface changed: `cacheTtl` is still seconds, still
   defaults to 300, and an unset (`null`/`undefined`) value still falls back to

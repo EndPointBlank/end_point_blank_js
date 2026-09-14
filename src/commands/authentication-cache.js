@@ -28,15 +28,45 @@ const MAX_SIZE = 1000;
  * look valid again even though it is well past what the new ttl allows.
  *
  * `cache_ttl <= 0` (after defaulting `null`/`undefined` to 300) means
- * disabled: every read is a miss and deletes the entry outright (not merely
- * hides it), and `store()` inserts nothing while disabled. This matches the
- * Elixir SDK's sc-660 fix, so re-enabling the cache afterward cannot
- * resurrect what was flushed while it was off.
+ * disabled. **AMENDED 2026-09-14** (controller ruling after js#50 review):
+ * any `retrieve`/`exists` OR `store` call that *observes* the cache disabled
+ * clears the ENTIRE cache -- every entry, not only the key that call looked
+ * up or was about to write -- and a disabled `store()` still inserts
+ * nothing afterward. This matches the Elixir SDK's `AuthCache` (sc-660),
+ * which clears its whole ETS table on any `get`/`put` made while disabled.
  *
- * A stale entry found on read is removed with a compare-then-delete against
- * the exact object read, never a blind `delete(key)` -- so a fresh write for
- * the same key can never be raced away by the cleanup of a stale one it
- * replaced.
+ * **Known residual, matching Elixir exactly, not fixed by this story:** the
+ * clear only happens on a call that *observes* the disabled state. A
+ * `configure({cacheTtl: 0})` immediately followed by `configure({cacheTtl:
+ * 300})`, with no `retrieve`/`exists`/`store` call in between, flushes
+ * nothing -- nothing ever ran while disabled to trigger the clear, so every
+ * entry keeps answering until its original expiry. An operator relying on
+ * "disable then re-enable" to force-flush a revoked grant must make sure at
+ * least one cache call (even a throwaway `retrieve` of any key) happens
+ * while `cache_ttl` is at zero.
+ *
+ * The previous, narrower behavior -- deleting only the looked-up key while
+ * disabled -- is what the original story text described and is still what
+ * py#38/rails#38/java#37 implement; the controller widened the rule for all
+ * five SDKs specifically because that narrower version let a revoked grant
+ * answer again after a disable/re-enable cycle that never happened to read
+ * it. See js#50 review comment and the amended `sc755-spec.md` rule 1/(d2).
+ *
+ * A stale entry found on read under a still-*enabled* ttl (the ordinary
+ * lowered-ttl case, not the disabled case above) is removed with a plain
+ * `this._cache.delete(key)`. No compare-then-delete guard against a
+ * concurrent fresh write is needed here: `_validEntry` and `store()` are
+ * fully synchronous with no `await`/yield point, and JavaScript's
+ * single-threaded execution model runs a synchronous function to completion
+ * before anything else touches the process -- so nothing can insert a fresh
+ * entry for the same key between this method's read of it and its delete.
+ * (Contrast Elixir's `:ets.delete_object/2` and Java's
+ * `ConcurrentHashMap.remove(key, value)`, both of which guard against real
+ * OS-thread concurrency that JS does not have.)
+ *
+ * `keys()` and `size()` reflect the Map as last touched by a read or write --
+ * an entry that nothing has looked up since it went stale is still counted
+ * until the next `retrieve`/`exists`/`store` call that reaches it.
  *
  * Equivalent to the Ruby gem's `EndPointBlank::Commands::AuthenticationCache`.
  */
@@ -61,34 +91,29 @@ class AuthenticationCache {
    * cache_ttl in effect at the moment of the check, which may differ from
    * the ttl in effect when *entry* was written).
    *
+   * Callers must check `_isDisabled(ttlSeconds)` themselves first -- both
+   * call sites (`_validEntry`, `store()`'s sweep) already do, to clear the
+   * whole cache on that path (see class doc), so this never needs its own
+   * disabled branch.
+   *
    * @param {{writtenAt: number, expiresAt: number}} entry
-   * @param {number} ttlSeconds the cache_ttl to check against
+   * @param {number} ttlSeconds the (already known non-disabled) cache_ttl to
+   *   check against
    * @param {number} now `Date.now()`, passed in so callers checking many
    *   entries (store()'s eviction sweep) use one consistent timestamp
    * @returns {boolean}
    */
   static _isValid(entry, ttlSeconds, now) {
-    if (AuthenticationCache._isDisabled(ttlSeconds)) return false;
     return now < entry.expiresAt && now - entry.writtenAt < ttlSeconds * 1000;
-  }
-
-  /**
-   * Deletes the entry at *key* only if it is still exactly *expectedEntry* --
-   * a compare-then-delete so cleanup of a stale read never clobbers a fresh
-   * write that has since replaced it under the same key.
-   */
-  _deleteStale(key, expectedEntry) {
-    if (this._cache.get(key) === expectedEntry) {
-      this._cache.delete(key);
-    }
   }
 
   /**
    * Stores *credentials* under *key* if non-null/undefined.
    *
-   * Inserts nothing while the cache is disabled (`cache_ttl <= 0`) -- writing
-   * an entry the cache would immediately treat as disabled-and-deleted on
-   * the next read would just be a slower way of doing nothing.
+   * If this call observes the cache disabled (`cache_ttl <= 0`), it clears
+   * the ENTIRE cache -- not only refusing to insert *credentials* -- per the
+   * amended rule 1 in the class doc above. That is a side effect independent
+   * of the key/credentials passed in.
    *
    * @param {string} key
    * @param {*} credentials
@@ -97,7 +122,10 @@ class AuthenticationCache {
     if (credentials == null) return;
 
     const ttlSeconds = AuthenticationCache._currentTtlSeconds();
-    if (AuthenticationCache._isDisabled(ttlSeconds)) return;
+    if (AuthenticationCache._isDisabled(ttlSeconds)) {
+      this._cache.clear();
+      return;
+    }
 
     const now = Date.now();
 
@@ -122,25 +150,36 @@ class AuthenticationCache {
   }
 
   /**
-   * Looks up *key* against the cache_ttl configured right now, deleting the
-   * entry (not merely hiding it) and returning `null` if it is stale or the
-   * cache is currently disabled. See the class doc for the exact rule.
+   * Looks up *key* against the cache_ttl configured right now. Returns
+   * `null` if absent, stale, or the cache is currently disabled.
+   *
+   * If this call observes the cache disabled, it clears the ENTIRE cache --
+   * not only the entry for *key*, and regardless of whether *key* is even
+   * present -- per the amended rule 1 in the class doc above. A merely-stale
+   * entry under a still-enabled ttl is removed individually instead (plain
+   * delete; see the class doc's "Concurrency" note for why no
+   * compare-then-delete guard is needed here).
    *
    * @param {string} key
    * @returns {{credentials: *, writtenAt: number, expiresAt: number}|null}
    */
   _validEntry(key) {
+    const ttlSeconds = AuthenticationCache._currentTtlSeconds();
+
+    if (AuthenticationCache._isDisabled(ttlSeconds)) {
+      this._cache.clear();
+      return null;
+    }
+
     const entry = this._cache.get(key);
     if (!entry) return null;
 
-    const ttlSeconds = AuthenticationCache._currentTtlSeconds();
     const now = Date.now();
-
     if (AuthenticationCache._isValid(entry, ttlSeconds, now)) {
       return entry;
     }
 
-    this._deleteStale(key, entry);
+    this._cache.delete(key);
     return null;
   }
 

@@ -68,12 +68,23 @@ test('store ignores null credentials', () => {
   expect(instance.exists('key1')).toBe(false);
 });
 
-test('expired entries return null', async () => {
-  config.cacheTtl = 0;
-  instance.store('key1', 'creds');
-  // TTL of 0ms means immediately expired
-  await new Promise((r) => setTimeout(r, 5));
-  expect(instance.retrieve('key1')).toBeNull();
+test('expired entries return null', () => {
+  // sc-755 review finding 4: this used to set cacheTtl = 0, which now means
+  // *disabled* (store() inserts nothing), so the old version passed no
+  // matter what expiry logic did or didn't do -- there was never an entry
+  // to find. Use a genuinely small, still-enabled ttl and real elapsed time
+  // instead, so this can actually fail if basic expiry breaks.
+  jest.useFakeTimers();
+  try {
+    config.cacheTtl = 5;
+    instance.store('key1', 'creds');
+
+    jest.advanceTimersByTime(6_000); // past the 5s ttl
+
+    expect(instance.retrieve('key1')).toBeNull();
+  } finally {
+    jest.useRealTimers();
+  }
 });
 
 describe('bounding the cache', () => {
@@ -93,11 +104,13 @@ describe('bounding the cache', () => {
     expect(instance.retrieve('key-0')).toBeNull();
   });
 
-  test('reclaims entries the current ttl has invalidated before evicting live ones', () => {
+  test('reclaims an entry past its own write-time expiry before evicting live ones', () => {
     // A stale entry is worthless; dropping a live one to make room for a new
     // arrival while dead entries sit in the map would cost a real round-trip
-    // to the authorize service. sc-755: "stale" is judged against the ttl in
-    // force *now* (10s, aged past), not the ttl it was written under.
+    // to the authorize service. Here "stale" is past the *original* expiry
+    // it was written with (10s, aged 11s) -- see the next test for the
+    // sweep evicting an entry that is only stale under a *lowered* current
+    // ttl, which this one does not exercise (sc-755 review finding 3).
     jest.useFakeTimers();
     try {
       config.cacheTtl = 10;
@@ -114,11 +127,43 @@ describe('bounding the cache', () => {
     }
   });
 
-  test('a store while cache_ttl is disabled inserts nothing', () => {
-    config.cacheTtl = 0;
-    instance.store('key', 'credentials');
+  test('reclaims an entry stale only under the current, lowered ttl -- not yet past its original expiry', () => {
+    // sc-755 review finding 3: the previous test above evicts an entry via
+    // its own write-time expiry, which a sweep reverted to the pre-sc-755
+    // `expiresAt <= now` check would already handle. This one is written
+    // under a long ttl (300s, nowhere near its original expiry) and only
+    // goes stale because cache_ttl is lowered afterward -- exercising the
+    // `now - writtenAt < ttlSeconds * 1000` half of _isValid inside store()'s
+    // sweep specifically.
+    jest.useFakeTimers();
+    try {
+      config.cacheTtl = 300;
+      instance.store('stale-under-new-ttl', 'old credentials'); // expiresAt = t0 + 300s
 
+      config.cacheTtl = 10;
+      jest.advanceTimersByTime(11_000); // 11s old: stale under the new 10s ttl, but far from the original 300s expiry
+
+      instance.store('fresh', 'new credentials'); // triggers the sweep under ttl=10
+
+      expect(instance.keys()).toEqual(['fresh']);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('a store that observes cache_ttl disabled inserts nothing AND clears the entire cache', () => {
+    config.cacheTtl = 300;
+    instance.store('already-cached', 'old credentials');
+
+    config.cacheTtl = 0;
+    instance.store('key', 'credentials'); // the disabled store itself
+
+    // Not just "key" was refused -- the pre-existing entry is gone too.
     expect(instance.size()).toBe(0);
+    expect(instance.keys()).toEqual([]);
+
+    config.cacheTtl = 300;
+    expect(instance.retrieve('already-cached')).toBeNull();
     expect(instance.retrieve('key')).toBeNull();
   });
 });
@@ -199,6 +244,30 @@ describe('sc-755: cache_ttl is re-consulted on every read', () => {
     expect(instance.exists('key')).toBe(false);
   });
 
+  test('(d2) AMENDED: a disabled read of ONE key clears every entry, so a different key misses after re-enable', () => {
+    // Controller amendment after js#50 review: the original rule ("delete
+    // the entry" in (d) above) let `configure({cacheTtl:0})` -> read key A
+    // -> `configure({cacheTtl:300})` leave key B answering again -- a
+    // revoked grant nobody happened to read while disabled resurfaced. This
+    // must fail against a per-entry-only delete (i.e. against this PR's own
+    // pre-amendment `_validEntry`, which only removed the looked-up key).
+    config.cacheTtl = 300;
+    instance.store('A', 'credentials-A');
+    instance.store('B', 'credentials-B');
+    expect(instance.size()).toBe(2);
+
+    config.cacheTtl = 0;
+    expect(instance.retrieve('A')).toBeNull(); // only A is looked up here
+
+    // The ENTIRE cache is gone, not just A -- this is what fails against a
+    // per-entry-only delete: B would still be size 1 / present at this point.
+    expect(instance.size()).toBe(0);
+    expect(instance.keys()).toEqual([]);
+
+    config.cacheTtl = 300;
+    expect(instance.retrieve('B')).toBeNull(); // not resurrected
+  });
+
   test('(e) sanity: an unchanged ttl within its window is still a hit', () => {
     config.cacheTtl = 300;
     instance.store('key', 'credentials');
@@ -207,25 +276,17 @@ describe('sc-755: cache_ttl is re-consulted on every read', () => {
     expect(instance.exists('key')).toBe(true);
   });
 
-  test('concurrency: cleaning up a stale entry never deletes a fresh write for the same key', () => {
-    // The delete triggered by finding a stale entry on read must be a
-    // compare-then-delete against the exact stale value, never a blind
-    // `delete(key)` -- otherwise it could remove a fresh entry that has
-    // since replaced it under the same key.
-    config.cacheTtl = 300;
-    instance.store('key', 'old credentials');
-    const staleEntry = instance._cache.get('key');
-
-    // Simulate a fresh write landing for the same key before the stale
-    // entry's cleanup runs.
-    instance._cache.set('key', {
-      credentials: 'new credentials',
-      writtenAt: Date.now(),
-      expiresAt: Date.now() + 300_000,
-    });
-
-    instance._deleteStale('key', staleEntry);
-
-    expect(instance.retrieve('key')).toBe('new credentials');
-  });
+  // sc-755 review finding 2: this used to call a private `_deleteStale`
+  // helper directly to prove a compare-then-delete guard, but a blind
+  // `delete(key)` passed every test in this file just the same -- the guard
+  // was never exercised through any real call path. It cannot be: `store`,
+  // `retrieve` and `exists` are fully synchronous with no `await`/yield
+  // point, and JS's single-threaded execution model runs a synchronous
+  // function to completion before anything else touches the process, so no
+  // write can land between a stale entry's lookup and its delete inside
+  // `_validEntry`. There is no scenario, real or simulated through the
+  // public API, in which that matters here -- unlike Elixir/Java, where an
+  // actual concurrent OS thread could race the delete. The guard and its
+  // test were removed rather than kept as untestable ceremony; see the
+  // "Concurrency" note in the class doc in authentication-cache.js.
 });

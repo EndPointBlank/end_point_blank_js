@@ -79,7 +79,7 @@ variable > default.**
 | `versionFinder` | — | `null` | `(req) => string \| null`, overrides automatic endpoint-version detection. |
 | `logMode` | — | `LogMode.DIRECT` | `LogMode.DIRECT` (synchronous POST) or `LogMode.DELAYED` (queued, flushed in the background, batches of 4, bounded at 1000 queued items). |
 | `tokenTtl` | — | `null` | Seconds; sent as `token_ttl` when requesting an access token, if set. |
-| `cacheTtl` | — | `300` | Seconds; TTL for the authentication-cache entries used by the `authenticated`/`authorized` Express guards. Re-read on every cache lookup (see note below), and `<= 0` disables the cache. |
+| `cacheTtl` | — | `300` | Seconds; TTL for the authentication-cache entries used by the `authenticated`/`authorized` Express guards. Re-read on every cache lookup (see note below); `<= 0` disables the cache, and the next lookup or write made while disabled clears the whole cache, not only itself. |
 | `trustProxyHeaders` | — | `true` | Whether the per-request `scheme`/`host`/`port` report honors `X-Forwarded-Proto`/`-Host`/`-Port`. See [Reported base URL](#reported-base-url). |
 | `workerCount` | — | `4` | Number of concurrent in-flight batch requests `LogMode.DELAYED` uses when draining its background queue (Node is single-threaded, so this is concurrent `setImmediate`/async work rather than OS threads — the closest analog to the Ruby gem's threaded writer pool). |
 | `maskingRules` | — | `[]` | See [Data masking](#data-masking). |
@@ -198,10 +198,21 @@ for entries already cached:
   sooner during an incident, without waiting out the original TTL.
 - **Raising it** never extends an entry past the expiry it was written with; only entries
   written after the change get the longer TTL.
-- **Setting it to `0` or lower disables the cache and clears every entry already in it** —
-  not just future writes. Re-enabling afterward starts from empty; a disabled-then-re-enabled
-  cache never resurrects what it held before being disabled. This is the same behavior as the
-  Elixir SDK's `AuthCache`.
+- **Setting it to `0` or lower disables the cache.** The *next* `authenticated`/`authorized`
+  check, or the next direct `retrieve`/`exists`/`store` call, that runs while it is disabled
+  clears the **entire** cache — every entry, not only the one that call happened to look up or
+  write — and inserts nothing if it was a store. This matches the Elixir SDK's `AuthCache`
+  (`get`/`put` while disabled wipe its whole table the same way).
+
+  **This clear only happens on a call that runs while disabled — it is not triggered by
+  `configure()` itself.** `configure({ cacheTtl: 0 })` immediately followed by
+  `configure({ cacheTtl: 300 })`, with no cache lookup or write in between, flushes **nothing**:
+  nothing ever ran while disabled to trigger the clear, so every entry — including a revoked
+  grant an operator meant to force out — keeps answering until its original expiry, up to the
+  TTL it was cached under. Elixir has this same residual for the same reason. If you are
+  disabling the cache specifically to force a flush, make sure at least one request (or a
+  direct `retrieve`/`store` call) actually happens before you re-enable it — disabling and
+  re-enabling back-to-back, on their own, do not touch the cache at all.
 
 Both guards post to the same endpoint and describe the call with the same keys — `client_auth`,
 `path`, `http_method`, `endpoint_version` and `source_ip`. `http_method` is required: a request
