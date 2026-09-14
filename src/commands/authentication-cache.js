@@ -64,6 +64,26 @@ const MAX_SIZE = 1000;
  * answer again after a disable/re-enable cycle that never happened to read
  * it. See js#50 review comment and the amended `sc755-spec.md` rule 1/(d2).
  *
+ * **Everything above is per-process (`js#50` review, round 3).** `config`
+ * (imported above) and `this._cache` are both plain in-memory state private
+ * to one Node process -- nothing here is shared, synchronized, or even
+ * visible across processes. A `configure()` call, "currently disabled", and
+ * the clear it can trigger all apply ONLY inside the process that runs them.
+ * In a multi-worker deployment (PM2/Node `cluster`, several container/app
+ * instances behind a load balancer, ...), each process has its own separate
+ * `cacheTtl`, its own separate notion of disabled, and its own separate
+ * cache Map. "Disable, let an `authorized` request through, re-enable" only
+ * flushes the process(es) that go through all three steps themselves: it is
+ * NOT fleet-wide, and nothing in this module coordinates it to be. A worker
+ * that `configure({cacheTtl: 0})` never reaches, or that gets no `authorized`
+ * traffic before being re-enabled, keeps its cache entirely untouched --
+ * including a revoked grant still answering from it -- independent of every
+ * other worker's state. There is no built-in way to disable, drain traffic
+ * to, and re-enable every process in a fleet as one operation; confirming a
+ * flush actually happened on every process is on the caller. (Restarting a
+ * process starts it with an empty cache for the same reason: the cache lives
+ * only in that process's memory.)
+ *
  * A stale entry found on read under a still-*enabled* ttl (the ordinary
  * lowered-ttl case, not the disabled case above) is removed with a plain
  * `this._cache.delete(key)`. No compare-then-delete guard against a

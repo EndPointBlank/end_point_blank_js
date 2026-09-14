@@ -6,12 +6,12 @@
 
 - **A runtime `cache_ttl` change now applies to entries already cached, not
   only to ones written afterward.** The authentication cache (used by the
-  `authenticated`/`authorized` Express guards) used to fix an entry's expiry
-  from the `cache_ttl` in effect when it was *written*, and never looked at
-  `cache_ttl` again on read. Lowering `cache_ttl` at runtime (the natural
-  operator move during an incident, to make a revocation take effect sooner)
-  did nothing to entries already in the cache — they kept answering until
-  their original, longer expiry.
+  `authorized` Express guard — `authenticated` never reads or writes it) used
+  to fix an entry's expiry from the `cache_ttl` in effect when it was
+  *written*, and never looked at `cache_ttl` again on read. Lowering
+  `cache_ttl` at runtime (the natural operator move during an incident, to
+  make a revocation take effect sooner) did nothing to entries already in the
+  cache — they kept answering until their original, longer expiry.
 
   Every read now re-checks `cache_ttl` as currently configured. An entry is a
   hit only if it is still within *both* its original expiry (raising
@@ -49,6 +49,22 @@
   cannot trigger it, whether or not the cache is currently disabled. (An
   earlier draft of this entry, and the README, said "an `authenticated`
   check" or "at least one request" — both wrong; caught in round-2 review.)
+
+  **All of the above is per-process, never fleet-wide.** `cacheTtl`, the
+  disabled state, and the cache are plain in-memory state private to one
+  Node process. In a multi-worker deployment (PM2/Node `cluster`, several
+  app instances behind a load balancer), each process has its own
+  independent copy of all three, and "disable → let an `authorized` request
+  through → re-enable" only flushes the process(es) that go through all
+  three steps themselves. A worker that a `configure({ cacheTtl: 0 })` call
+  never reaches, or that gets no `authorized` traffic before being
+  re-enabled, keeps its cache — including a revoked grant still in it —
+  completely untouched, regardless of what any other worker did. Nothing
+  here disables, drains traffic to, and re-enables an entire fleet as one
+  step; that coordination, and confirming it happened everywhere, is on the
+  caller. (Caught in round-3 review: an earlier draft of this entry and the
+  README described the flush without saying it never crosses process
+  boundaries.)
 
   No configuration surface changed: `cacheTtl` is still seconds, still
   defaults to 300, and an unset (`null`/`undefined`) value still falls back to
