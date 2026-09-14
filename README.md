@@ -79,7 +79,7 @@ variable > default.**
 | `versionFinder` | — | `null` | `(req) => string \| null`, overrides automatic endpoint-version detection. |
 | `logMode` | — | `LogMode.DIRECT` | `LogMode.DIRECT` (synchronous POST) or `LogMode.DELAYED` (queued, flushed in the background, batches of 4, bounded at 1000 queued items). |
 | `tokenTtl` | — | `null` | Seconds; sent as `token_ttl` when requesting an access token, if set. |
-| `cacheTtl` | — | `300` | Seconds; TTL for the authentication-cache entries used by the `authenticated`/`authorized` Express guards. |
+| `cacheTtl` | — | `300` | Seconds; TTL for the authentication-cache entries used by the `authorized` Express guard (`authenticated` never reads or writes this cache). Re-read on every cache lookup (see note below); `<= 0` disables the cache, and the next lookup or write made in *this process* while disabled clears that process's whole cache, not only itself — see the per-process note below. |
 | `trustProxyHeaders` | — | `true` | Whether the per-request `scheme`/`host`/`port` report honors `X-Forwarded-Proto`/`-Host`/`-Port`. See [Reported base URL](#reported-base-url). |
 | `workerCount` | — | `4` | Number of concurrent in-flight batch requests `LogMode.DELAYED` uses when draining its background queue (Node is single-threaded, so this is concurrent `setImmediate`/async work rather than OS threads — the closest analog to the Ruby gem's threaded writer pool). |
 | `maskingRules` | — | `[]` | See [Data masking](#data-masking). |
@@ -188,6 +188,60 @@ Successful `authorized` checks are cached in-process (keyed on credentials + pat
 trip. Authorization and authentication requests to EndPointBlank use HTTP Basic auth built from
 `clientId`/`clientSecret` (`Authorization.header()`) — EndPointBlank already holds this service's
 credential, so minting a token to present it back would buy nothing.
+
+`cacheTtl` is consulted fresh on every cache read, not only when an entry is written, so a
+`configure({ cacheTtl: ... })` call made while the process is running takes effect immediately
+for entries already cached:
+
+- **Lowering it** shortens the remaining life of existing entries to the new window, measured
+  from when each was written — useful for making a revoked grant stop answering from cache
+  sooner during an incident, without waiting out the original TTL.
+- **Raising it** never extends an entry past the expiry it was written with; only entries
+  written after the change get the longer TTL.
+- **Setting it to `0` or lower disables the cache.** The *next* thing that actually touches the
+  cache while it is disabled clears the **entire** cache — every entry, not only the one that
+  call happened to look up or write — and inserts nothing if it was a store. That "next thing"
+  is specifically: **an `authorized` request** (it is the only one of the two Express guards
+  that reads or writes this cache at all — **`authenticated` never touches it**, so
+  `authenticated`-only or unguarded traffic can never trigger this clear, disabled or not), or
+  a direct `retrieve`/`exists`/`store` call against the underlying `AuthenticationCache`
+  instance (internal; this is how this package's own tests exercise it). This matches the
+  Elixir SDK's `AuthCache` (`get`/`put` while disabled wipe its whole table the same way).
+
+  **This clear only happens on an `authorized` request (never an `authenticated` one) or a
+  direct cache call made while disabled — it is not triggered by `configure()` itself.**
+  `configure({ cacheTtl: 0 })` immediately followed by `configure({ cacheTtl: 300 })`, with no
+  `authorized` request or direct cache call in between, flushes **nothing**: nothing ever ran
+  while disabled to trigger the clear, so every entry — including a revoked grant an operator
+  meant to force out — keeps answering until its original expiry, up to the TTL it was cached
+  under. Elixir has this same residual for the same reason. If you are disabling the cache
+  specifically to force a flush, make sure at least one `authorized` request (or a direct
+  `retrieve`/`store` call) actually happens before you re-enable it — disabling and re-enabling
+  back-to-back, with no `authorized` traffic in between, do not touch the cache at all, and
+  `authenticated`-only or unguarded traffic in that window never will either.
+
+  **All of this is per-process — `cacheTtl`, "currently disabled", and the cache itself are all
+  plain in-memory state private to one Node process, never shared or coordinated across
+  processes.** In any deployment with more than one process serving traffic — a PM2 or Node
+  `cluster` with multiple workers, several container/app instances behind a load balancer, and
+  so on — each process has its own independent copy of all three. A `configure()` call changes
+  only the process that executes it; the disabled-and-clear behavior above only ever affects the
+  cache of whichever process happens to handle the `authorized` request or direct cache call.
+
+  Concretely: "disable, let a request through, re-enable" flushes only the process(es) that
+  actually go through all three steps *themselves* — it does not flush a fleet as a unit, and
+  nothing here coordinates that across processes. For a given worker's cache to clear, that
+  worker must (1) have `cacheTtl` set to `<= 0` in its own memory, (2) itself handle an
+  `authorized` request (or a direct cache call) while it is in that state, and (3) only then have
+  `cacheTtl` set back to a positive value. If `configure({ cacheTtl: 0 })` only reaches one
+  worker (an admin action routed to a single process, for example), or a worker gets no
+  `authorized` traffic before it is re-enabled, that worker's cache is left untouched and a
+  revoked grant keeps answering from it for up to its original TTL — on that worker only,
+  independent of what any other worker's cache is doing. There is nothing in this SDK that
+  disables, drains traffic to, and re-enables every process in a fleet together; confirming a
+  fleet-wide flush actually happened, process by process, is on the operator. Restarting every
+  process is one direct way to start each one with an empty cache, since the cache lives only in
+  that process's memory and nowhere else.
 
 Both guards post to the same endpoint and describe the call with the same keys — `client_auth`,
 `path`, `http_method`, `endpoint_version` and `source_ip`. `http_method` is required: a request
