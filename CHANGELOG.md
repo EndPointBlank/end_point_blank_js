@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A runtime `cache_ttl` change now applies to entries already cached, not
+  only to ones written afterward.** The authentication cache (used by the
+  `authenticated`/`authorized` Express guards) used to fix an entry's expiry
+  from the `cache_ttl` in effect when it was *written*, and never looked at
+  `cache_ttl` again on read. Lowering `cache_ttl` at runtime (the natural
+  operator move during an incident, to make a revocation take effect sooner)
+  did nothing to entries already in the cache — they kept answering until
+  their original, longer expiry.
+
+  Every read now re-checks `cache_ttl` as currently configured. An entry is a
+  hit only if it is still within *both* its original expiry (raising
+  `cache_ttl` later never extends an entry) and the window the *current*
+  `cache_ttl` allows measured from when it was written (lowering `cache_ttl`
+  takes effect on the very next read). This is anchored to write time, not to
+  a `remaining-time <= new-ttl` comparison — the latter is a clamp bug where
+  an old entry's dwindling remaining-time-to-original-expiry can coincidentally
+  fall back under a new, shorter window and look valid again.
+
+  **`cache_ttl <= 0` now disables the cache and clears it — new behavior.**
+  Previously `cache_ttl <= 0` did nothing at all: entries kept being written
+  and read normally. Now, once disabled, every read is a miss and deletes the
+  entry outright (not merely hides it), and `store()` inserts nothing while
+  disabled — so re-enabling the cache afterward cannot resurrect an entry an
+  operator disabled the cache specifically to flush. Matches the Elixir SDK's
+  `AuthCache` (sc-660).
+
+  No configuration surface changed: `cacheTtl` is still seconds, still
+  defaults to 300, and an unset (`null`/`undefined`) value still falls back to
+  the default rather than being treated as disabled.
+
 ### Changed
 
 - **Behaviour change: `configure` now throws on an unknown key.** It used to

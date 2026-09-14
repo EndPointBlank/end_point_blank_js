@@ -79,7 +79,7 @@ variable > default.**
 | `versionFinder` | — | `null` | `(req) => string \| null`, overrides automatic endpoint-version detection. |
 | `logMode` | — | `LogMode.DIRECT` | `LogMode.DIRECT` (synchronous POST) or `LogMode.DELAYED` (queued, flushed in the background, batches of 4, bounded at 1000 queued items). |
 | `tokenTtl` | — | `null` | Seconds; sent as `token_ttl` when requesting an access token, if set. |
-| `cacheTtl` | — | `300` | Seconds; TTL for the authentication-cache entries used by the `authenticated`/`authorized` Express guards. |
+| `cacheTtl` | — | `300` | Seconds; TTL for the authentication-cache entries used by the `authenticated`/`authorized` Express guards. Re-read on every cache lookup (see note below), and `<= 0` disables the cache. |
 | `trustProxyHeaders` | — | `true` | Whether the per-request `scheme`/`host`/`port` report honors `X-Forwarded-Proto`/`-Host`/`-Port`. See [Reported base URL](#reported-base-url). |
 | `workerCount` | — | `4` | Number of concurrent in-flight batch requests `LogMode.DELAYED` uses when draining its background queue (Node is single-threaded, so this is concurrent `setImmediate`/async work rather than OS threads — the closest analog to the Ruby gem's threaded writer pool). |
 | `maskingRules` | — | `[]` | See [Data masking](#data-masking). |
@@ -188,6 +188,20 @@ Successful `authorized` checks are cached in-process (keyed on credentials + pat
 trip. Authorization and authentication requests to EndPointBlank use HTTP Basic auth built from
 `clientId`/`clientSecret` (`Authorization.header()`) — EndPointBlank already holds this service's
 credential, so minting a token to present it back would buy nothing.
+
+`cacheTtl` is consulted fresh on every cache read, not only when an entry is written, so a
+`configure({ cacheTtl: ... })` call made while the process is running takes effect immediately
+for entries already cached:
+
+- **Lowering it** shortens the remaining life of existing entries to the new window, measured
+  from when each was written — useful for making a revoked grant stop answering from cache
+  sooner during an incident, without waiting out the original TTL.
+- **Raising it** never extends an entry past the expiry it was written with; only entries
+  written after the change get the longer TTL.
+- **Setting it to `0` or lower disables the cache and clears every entry already in it** —
+  not just future writes. Re-enabling afterward starts from empty; a disabled-then-re-enabled
+  cache never resurrects what it held before being disabled. This is the same behavior as the
+  Elixir SDK's `AuthCache`.
 
 Both guards post to the same endpoint and describe the call with the same keys — `client_auth`,
 `path`, `http_method`, `endpoint_version` and `source_ip`. `http_method` is required: a request
