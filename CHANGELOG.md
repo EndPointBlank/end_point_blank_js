@@ -40,6 +40,16 @@
   while disabled, and shipped a README/CHANGELOG mismatch caught in review —
   see js#50.)
 
+  **The trigger, precisely:** of the two Express guards, only `authorized`
+  reads or writes this cache (`EndpointAuthorize.authorize`); `authenticated`
+  never does. So it is specifically an `authorized` request — or a direct
+  `retrieve`/`exists`/`store` call — that must happen while `cache_ttl` is
+  `<= 0` for the clear (or the residual's escape hatch) to apply.
+  `authenticated`-only or unguarded traffic never reaches this cache and
+  cannot trigger it, whether or not the cache is currently disabled. (An
+  earlier draft of this entry, and the README, said "an `authenticated`
+  check" or "at least one request" — both wrong; caught in round-2 review.)
+
   No configuration surface changed: `cacheTtl` is still seconds, still
   defaults to 300, and an unset (`null`/`undefined`) value still falls back to
   the default rather than being treated as disabled.

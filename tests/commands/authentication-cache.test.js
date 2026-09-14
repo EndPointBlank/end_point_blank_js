@@ -268,6 +268,29 @@ describe('sc-755: cache_ttl is re-consulted on every read', () => {
     expect(instance.retrieve('B')).toBeNull(); // not resurrected
   });
 
+  test('(d3) a disabled read of a key that was NEVER cached still clears the entire cache', () => {
+    // sc-755 review round 2, finding 2: the documented trigger is "any call
+    // that observes disabled", independent of whether the specific key it
+    // looked up was ever present. `_validEntry` checks disabled BEFORE
+    // `this._cache.get(key)`, so a lookup-miss on an uncached key still
+    // clears everything. Moving that check below the key-present check
+    // (i.e. returning early on a missing key before ever consulting
+    // cache_ttl) would make this go RED while every other test in this file
+    // still passes -- that reordering was otherwise unobserved.
+    config.cacheTtl = 300;
+    instance.store('A', 'credentials-A');
+    expect(instance.size()).toBe(1);
+
+    config.cacheTtl = 0;
+    // 'uncached-key' was never stored -- a key-present-first implementation
+    // would short-circuit to null here without ever touching cache_ttl or
+    // clearing anything, leaving A's entry sitting in the map.
+    expect(instance.retrieve('uncached-key')).toBeNull();
+
+    expect(instance.size()).toBe(0);
+    expect(instance.keys()).toEqual([]);
+  });
+
   test('(e) sanity: an unchanged ttl within its window is still a hit', () => {
     config.cacheTtl = 300;
     instance.store('key', 'credentials');

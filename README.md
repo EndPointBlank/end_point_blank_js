@@ -198,21 +198,27 @@ for entries already cached:
   sooner during an incident, without waiting out the original TTL.
 - **Raising it** never extends an entry past the expiry it was written with; only entries
   written after the change get the longer TTL.
-- **Setting it to `0` or lower disables the cache.** The *next* `authenticated`/`authorized`
-  check, or the next direct `retrieve`/`exists`/`store` call, that runs while it is disabled
-  clears the **entire** cache — every entry, not only the one that call happened to look up or
-  write — and inserts nothing if it was a store. This matches the Elixir SDK's `AuthCache`
-  (`get`/`put` while disabled wipe its whole table the same way).
+- **Setting it to `0` or lower disables the cache.** The *next* thing that actually touches the
+  cache while it is disabled clears the **entire** cache — every entry, not only the one that
+  call happened to look up or write — and inserts nothing if it was a store. That "next thing"
+  is specifically: **an `authorized` request** (it is the only one of the two Express guards
+  that reads or writes this cache at all — **`authenticated` never touches it**, so
+  `authenticated`-only or unguarded traffic can never trigger this clear, disabled or not), or
+  a direct `retrieve`/`exists`/`store` call against the underlying `AuthenticationCache`
+  instance (internal; this is how this package's own tests exercise it). This matches the
+  Elixir SDK's `AuthCache` (`get`/`put` while disabled wipe its whole table the same way).
 
-  **This clear only happens on a call that runs while disabled — it is not triggered by
-  `configure()` itself.** `configure({ cacheTtl: 0 })` immediately followed by
-  `configure({ cacheTtl: 300 })`, with no cache lookup or write in between, flushes **nothing**:
-  nothing ever ran while disabled to trigger the clear, so every entry — including a revoked
-  grant an operator meant to force out — keeps answering until its original expiry, up to the
-  TTL it was cached under. Elixir has this same residual for the same reason. If you are
-  disabling the cache specifically to force a flush, make sure at least one request (or a
-  direct `retrieve`/`store` call) actually happens before you re-enable it — disabling and
-  re-enabling back-to-back, on their own, do not touch the cache at all.
+  **This clear only happens on an `authorized` request (never an `authenticated` one) or a
+  direct cache call made while disabled — it is not triggered by `configure()` itself.**
+  `configure({ cacheTtl: 0 })` immediately followed by `configure({ cacheTtl: 300 })`, with no
+  `authorized` request or direct cache call in between, flushes **nothing**: nothing ever ran
+  while disabled to trigger the clear, so every entry — including a revoked grant an operator
+  meant to force out — keeps answering until its original expiry, up to the TTL it was cached
+  under. Elixir has this same residual for the same reason. If you are disabling the cache
+  specifically to force a flush, make sure at least one `authorized` request (or a direct
+  `retrieve`/`store` call) actually happens before you re-enable it — disabling and re-enabling
+  back-to-back, with no `authorized` traffic in between, do not touch the cache at all, and
+  `authenticated`-only or unguarded traffic in that window never will either.
 
 Both guards post to the same endpoint and describe the call with the same keys — `client_auth`,
 `path`, `http_method`, `endpoint_version` and `source_ip`. `http_method` is required: a request

@@ -42,8 +42,20 @@ const MAX_SIZE = 1000;
  * nothing -- nothing ever ran while disabled to trigger the clear, so every
  * entry keeps answering until its original expiry. An operator relying on
  * "disable then re-enable" to force-flush a revoked grant must make sure at
- * least one cache call (even a throwaway `retrieve` of any key) happens
- * while `cache_ttl` is at zero.
+ * least one cache call (even a `retrieve` of a key that was never cached --
+ * see the class doc's `_validEntry` note on checking disabled before the key)
+ * happens while `cache_ttl` is at zero.
+ *
+ * **Precise trigger from the Express integration (`js#50` review, round 2):**
+ * of the two guards, only `authorized` (`express/authorized.js` ->
+ * `EndpointAuthorize.authorize` -> this module's `retrieve`/`store`) ever
+ * calls into this cache. `authenticated` (`express/authenticated.js` ->
+ * `BasicAuthenticate.authenticate`) never requires this file and never
+ * touches `instance` -- so `authenticated`-only or unguarded traffic during
+ * a disabled window does not count as "a call that observes disabled" above,
+ * and cannot trigger the clear or the residual's escape hatch. Only an
+ * `authorized` request, or a direct `retrieve`/`exists`/`store` call on
+ * `instance`, does.
  *
  * The previous, narrower behavior -- deleting only the looked-up key while
  * disabled -- is what the original story text described and is still what
