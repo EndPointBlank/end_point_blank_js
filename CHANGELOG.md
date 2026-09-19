@@ -66,11 +66,33 @@
   README described the flush without saying it never crosses process
   boundaries.)
 
-  No configuration surface changed: `cacheTtl` is still seconds, still
-  defaults to 300, and an unset (`null`/`undefined`) value still falls back to
-  the default rather than being treated as disabled.
+  No configuration surface changed here: `cacheTtl` is still seconds and still
+  defaults to 300. (An explicit `null` also fell back to the default at the
+  time; it is now refused instead — see the sc-970 entry under Changed.)
 
 ### Changed
+
+- **Behaviour change: an invalid `cacheTtl` now throws at `configure()` time
+  (sc-970).** `cache_ttl` now follows one rule, decided for the JS, Java,
+  Elixir, Python and Rails SDKs alike: omitted means the default of 300
+  seconds, `0` disables the cache, a positive integer is that many seconds,
+  and anything else throws a `ConfigurationError`. `configure()` throws before
+  applying any key from that call, the same all-or-nothing rule an unknown
+  key already gets. Assigning `epb.config.cacheTtl` directly is checked too,
+  and a refused value leaves the previous one in place.
+
+  | `cacheTtl` | before | now |
+  | --- | --- | --- |
+  | omitted / `undefined`, `0`, a positive integer | as documented | unchanged |
+  | `null` | stored; silently treated as 300 at the first cache lookup | throws |
+  | a negative number, e.g. `-5` | silently disabled the cache, like `0` | throws |
+  | a float, e.g. `3.5` | used as a fractional TTL | throws |
+  | a numeric string, e.g. `'300'` | coerced, and worked as 300 | throws |
+  | a non-numeric string, e.g. `'abc'`, or `NaN` | stored; every entry got a `NaN` expiry and could never be hit, so the cache was silently off while still accepting writes | throws |
+
+  **Migration:** drop `cacheTtl: null` and let the default apply; replace a
+  negative value with `0`; pass a number, not a string — a value read from an
+  environment variable has to be converted first.
 
 - **Behaviour change: `configure` now throws on an unknown key.** It used to
   iterate its own list of valid keys and ignore everything else in `opts`, so a
