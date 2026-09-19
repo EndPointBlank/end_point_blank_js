@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Unchanged
+
+- **`configure()` is already all-or-nothing (sc-1266, a follow-up to sc-970).**
+  The sc-970 reviews found Rails and Java applying part of a `configure()`
+  call — fields ahead of an invalid one in the assignment order stayed
+  assigned after the call raised. This SDK already validates every supplied
+  value before assigning any of them: the `unknown`-key check runs first (see
+  the 0.12.0 entry below), and `cacheTtl`, the one other currently validated
+  field, is pre-checked before the assignment loop runs specifically so that
+  fields ordered ahead of it in `CONFIGURE_KEYS` (e.g. `clientId`) are never
+  assigned before an invalid `cacheTtl` is caught.
+
+  This release adds the cross-SDK regression test sc-1266 requires in every
+  SDK regardless of whether it was already passing here — `tests/configuration.test.js`,
+  `"sc-1266: configure() is all-or-nothing"` — and confirms by mutation
+  (temporarily removing the `cacheTtl` pre-check and rerunning that exact
+  test) that it actually catches a partial-apply regression rather than
+  passing regardless of one. No `src/` behaviour changed.
+
 ## 0.12.0
 
 ### Fixed

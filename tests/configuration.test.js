@@ -281,6 +281,31 @@ describe('sc-970: the cacheTtl contract', () => {
   });
 });
 
+// sc-1266: follow-up to sc-970. Rails and Java were found to apply fields
+// assigned before an invalid one, leaving a caller that catches the
+// ConfigurationError with a half-updated configuration. Every SDK gets this
+// exact test regardless of whether it already behaved this way, so a future
+// regression in *this* SDK is caught by a test that was written for it, not
+// only by the narrower cacheTtl-specific one above.
+//
+// workerCount is assigned earlier than cacheTtl in CONFIGURE_KEYS, so if
+// configure()'s cacheTtl pre-check were ever removed (leaving only the
+// cacheTtl setter's own validation, reached partway through the assignment
+// loop), workerCount would already be assigned by the time cacheTtl threw --
+// this test would then fail. It has no ENDPOINTBLANK_* env var fallback, so
+// it can't pass or fail depending on the machine it runs on.
+describe('sc-1266: configure() is all-or-nothing', () => {
+  test('a configure() call with one valid field and one invalid field applies neither', () => {
+    expect(config.workerCount).toBe(4); // the default, confirmed before mutating it
+
+    expect(() => epb.configure({ workerCount: 9, cacheTtl: -1 }))
+      .toThrow(ConfigurationError);
+
+    expect(config.workerCount).toBe(4);
+    expect(config.cacheTtl).toBe(300);
+  });
+});
+
 test('default base urls', () => {
   expect(config.baseUrl).toBe('https://in.endpointblank.com');
   expect(config.logBaseUrl).toBe('https://log.endpointblank.com');
