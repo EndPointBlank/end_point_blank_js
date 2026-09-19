@@ -101,7 +101,7 @@ describe('configure refuses unknown keys', () => {
   });
 });
 
-// sc-970: one rule for `cache_ttl`, identical in the JS, Java, Elixir, Python
+// sc-970: the one `cache_ttl` rule decided for the JS, Java, Elixir, Python
 // and Rails SDKs. Omitted means the 300s default; `0` means the cache is
 // disabled; an explicit `null`, a negative number, or anything that is not an
 // integer is refused with a ConfigurationError at configure time -- not
@@ -234,9 +234,13 @@ describe('sc-970: the cacheTtl contract', () => {
 
     test('a bad cacheTtl applies nothing else from the same configure() call', () => {
       // The same all-or-nothing rule an unknown key gets: a caller that
-      // catches the error must not be left half-configured.
-      expect(() => epb.configure({ clientId: 'my-id', cacheTtl: -5 })).toThrow(ConfigurationError);
-      expect(config.clientId).toBeNull();
+      // catches the error must not be left half-configured. The other key
+      // has to be one configure() assigns before cacheTtl, or the cacheTtl
+      // setter's own throw would stop the loop before reaching it anyway;
+      // applicationVersion is, and has no env-var fallback to muddy the read.
+      expect(() => epb.configure({ applicationVersion: '3.4.1', cacheTtl: -5 }))
+        .toThrow(ConfigurationError);
+      expect(config.applicationVersion).toBeNull();
       expect(config.cacheTtl).toBe(300);
     });
   });

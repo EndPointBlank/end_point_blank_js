@@ -59,7 +59,7 @@ const CONFIGURE_KEYS = Object.freeze([
  *
  * @throws {ConfigurationError} if any key in `opts` is unknown, or `cacheTtl`
  *   is invalid
-
+ *
  * @param {object} opts
  * @param {string} [opts.clientId]
  * @param {string} [opts.clientSecret]
