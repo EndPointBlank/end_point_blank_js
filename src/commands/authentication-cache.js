@@ -27,8 +27,12 @@ const MAX_SIZE = 1000;
  * original-expiry can coincidentally fall back under a new, shorter ttl and
  * look valid again even though it is well past what the new ttl allows.
  *
- * `cache_ttl <= 0` (after defaulting `null`/`undefined` to 300) means
- * disabled. **AMENDED 2026-09-14** (controller ruling after js#50 review):
+ * `cache_ttl` of 0 means disabled. (`config.cacheTtl` is always a
+ * non-negative integer: `null`, negatives and non-integers are refused with
+ * a `ConfigurationError` when they are configured -- sc-970 -- so nothing
+ * here defaults or second-guesses the value it reads.)
+ *
+ * **AMENDED 2026-09-14** (controller ruling after js#50 review):
  * any `retrieve`/`exists` OR `store` call that *observes* the cache disabled
  * clears the ENTIRE cache -- every entry, not only the key that call looked
  * up or was about to write -- and a disabled `store()` still inserts
@@ -108,12 +112,15 @@ class AuthenticationCache {
     this._cache = new Map();
   }
 
-  /** Returns the effective `cache_ttl` in seconds, defaulting `null`/`undefined` to 300. */
+  /**
+   * Returns `cache_ttl` in seconds as configured right now. No fallback: the
+   * `cacheTtl` setter guarantees a non-negative integer (sc-970).
+   */
   static _currentTtlSeconds() {
-    return config.cacheTtl ?? 300;
+    return config.cacheTtl;
   }
 
-  /** `cache_ttl <= 0` disables the cache outright. */
+  /** `cache_ttl` of 0 disables the cache outright (negatives never get this far). */
   static _isDisabled(ttlSeconds) {
     return ttlSeconds <= 0;
   }
@@ -142,7 +149,7 @@ class AuthenticationCache {
   /**
    * Stores *credentials* under *key* if non-null/undefined.
    *
-   * If this call observes the cache disabled (`cache_ttl <= 0`), it clears
+   * If this call observes the cache disabled (`cache_ttl` of 0), it clears
    * the ENTIRE cache -- not only refusing to insert *credentials* -- per the
    * amended rule 1 in the class doc above. That is a side effect independent
    * of the key/credentials passed in.

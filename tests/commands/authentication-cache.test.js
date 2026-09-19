@@ -1,7 +1,7 @@
 'use strict';
 
 const { AuthenticationCache, instance } = require('../../src/commands/authentication-cache');
-const { instance: config } = require('../../src/configuration');
+const { instance: config, ConfigurationError } = require('../../src/configuration');
 
 beforeEach(() => {
   instance.clear();
@@ -168,13 +168,23 @@ describe('bounding the cache', () => {
   });
 });
 
-test('an unset cache TTL falls back to the default rather than expiring at once', () => {
-  // `config.cacheTtl = null` is a plausible way to try to "turn off" the
-  // setting. Treating it as zero would make every request re-authorize.
-  config.cacheTtl = null;
+// sc-970: `null` used to reach this cache and be defaulted to 300 here, at
+// first use. It is now refused when it is assigned (see the cacheTtl contract
+// in tests/configuration.test.js), so the cache never sees a ttl that is not
+// a non-negative integer -- and a refused value must not disturb the ttl the
+// cache is already running under.
+test.each([
+  ['null', null],
+  ['a negative number', -5],
+  ['a string', 'abc'],
+  ['a float', 3.5],
+])('a refused cacheTtl (%s) never reaches the cache, which keeps the ttl it had', (_label, value) => {
+  config.cacheTtl = 300;
+
+  expect(() => { config.cacheTtl = value; }).toThrow(ConfigurationError);
+  expect(config.cacheTtl).toBe(300);
 
   instance.store('key', 'credentials');
-
   expect(instance.retrieve('key')).toBe('credentials');
 });
 

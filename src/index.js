@@ -29,7 +29,9 @@
  * ```
  */
 
-const { instance: config, LogMode, ConfigurationError } = require('./configuration');
+const {
+  instance: config, LogMode, ConfigurationError, validateCacheTtl,
+} = require('./configuration');
 const { UnauthorizedError } = require('./unauthorized-error');
 const { VERSION } = require('./version');
 const { TokenOutcome } = require('./commands/generate-access-token');
@@ -50,8 +52,14 @@ const CONFIGURE_KEYS = Object.freeze([
  * `clientSecert` or `baseUri` would otherwise leave the app running with no
  * credentials, or pointed at the production default, with nothing to say so.
  *
- * @throws {ConfigurationError} if any key in `opts` is unknown
-
+ * Also throws {@link ConfigurationError}, again applying nothing, if
+ * `cacheTtl` is present but is not a non-negative integer (sc-970): an
+ * explicit `null`, a negative number, a float, a string. Omit `cacheTtl` (or
+ * pass `undefined`) for the default of 300; pass `0` to disable the cache.
+ *
+ * @throws {ConfigurationError} if any key in `opts` is unknown, or `cacheTtl`
+ *   is invalid
+ *
  * @param {object} opts
  * @param {string} [opts.clientId]
  * @param {string} [opts.clientSecret]
@@ -64,7 +72,8 @@ const CONFIGURE_KEYS = Object.freeze([
  * @param {Function} [opts.versionFinder] - `(req) => string|null`
  * @param {string} [opts.applicationVersion]
  * @param {number} [opts.tokenTtl] - Seconds
- * @param {number} [opts.cacheTtl] - Seconds (default: 300)
+ * @param {number} [opts.cacheTtl] - Seconds, a non-negative integer
+ *   (default: 300; `0` disables the cache)
  */
 function configure(opts = {}) {
   // Checked in full before anything is assigned, so a bad call changes nothing.
@@ -75,6 +84,9 @@ function configure(opts = {}) {
       `Valid keys are: ${CONFIGURE_KEYS.join(', ')}. No configuration was applied.`
     );
   }
+  // The `cacheTtl` setter validates too, but by the time the loop below
+  // reaches it, the keys before it would already have been assigned.
+  if (opts.cacheTtl !== undefined) validateCacheTtl(opts.cacheTtl);
   for (const key of CONFIGURE_KEYS) {
     if (opts[key] !== undefined) {
       config[key] = opts[key];
@@ -87,11 +99,13 @@ module.exports = {
   VERSION,
   LogMode,
   UnauthorizedError,
-  // Thrown from a baseUrl/logBaseUrl getter on first read if the configured
-  // value can never produce a working URL. Re-exported here, next to
-  // UnauthorizedError, so a caller catching this breaking-change throw does
-  // not have to reach into src/configuration -- the path this package's
-  // public surface otherwise refuses to make people take.
+  // Thrown by configure() for an unknown key or an invalid cacheTtl, by the
+  // cacheTtl setter on direct assignment, and from a baseUrl/logBaseUrl
+  // getter on first read if the configured value can never produce a working
+  // URL. Re-exported here, next to UnauthorizedError, so a caller catching
+  // one of these breaking-change throws does not have to reach into
+  // src/configuration -- the path this package's public surface otherwise
+  // refuses to make people take.
   ConfigurationError,
   // How a token request came back, for callers that branch on it. Surfaced
   // here for the same reason LogMode is: it is a constant a consumer has to

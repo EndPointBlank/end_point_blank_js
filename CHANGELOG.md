@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.12.0
 
 ### Fixed
 
@@ -22,13 +22,15 @@
   an old entry's dwindling remaining-time-to-original-expiry can coincidentally
   fall back under a new, shorter window and look valid again.
 
-  **`cache_ttl <= 0` now disables the cache — new behavior.** Previously
-  `cache_ttl <= 0` did nothing at all: entries kept being written and read
-  normally. Now, the next `retrieve`/`exists`/`store` call that runs while
-  disabled is a miss (a store also inserts nothing) **and clears the entire
-  cache** — every entry, not only the key that call looked up or wrote —
-  matching the Elixir SDK's `AuthCache` (sc-660), which wipes its whole table
-  on any `get`/`put` made while disabled.
+  **A `cache_ttl` of `0` now disables the cache — new behavior.** Previously
+  `0` did nothing at all: entries kept being written and read normally. (A
+  negative value is refused in this release rather than disabling the cache —
+  see the sc-970 entry under Changed.) Now, the next
+  `retrieve`/`exists`/`store` call that runs while disabled is a miss (a
+  store also inserts nothing) **and clears the entire cache** — every entry,
+  not only the key that call looked up or wrote — matching the Elixir SDK's
+  `AuthCache` (sc-660), which wipes its whole table on any `get`/`put` made
+  while disabled.
 
   **Known residual, same as Elixir's:** the clear is triggered by a cache
   call observing the disabled state, not by `configure()` itself. Calling
@@ -44,7 +46,7 @@
   reads or writes this cache (`EndpointAuthorize.authorize`); `authenticated`
   never does. So it is specifically an `authorized` request — or a direct
   `retrieve`/`exists`/`store` call — that must happen while `cache_ttl` is
-  `<= 0` for the clear (or the residual's escape hatch) to apply.
+  `0` for the clear (or the residual's escape hatch) to apply.
   `authenticated`-only or unguarded traffic never reaches this cache and
   cannot trigger it, whether or not the cache is currently disabled. (An
   earlier draft of this entry, and the README, said "an `authenticated`
@@ -66,11 +68,35 @@
   README described the flush without saying it never crosses process
   boundaries.)
 
-  No configuration surface changed: `cacheTtl` is still seconds, still
-  defaults to 300, and an unset (`null`/`undefined`) value still falls back to
-  the default rather than being treated as disabled.
+  No configuration surface changed in this fix: `cacheTtl` is still seconds
+  and still defaults to 300. (Which values `cacheTtl` accepts did change in
+  this release: an explicit `null` or a negative number is now refused — see
+  the sc-970 entry under Changed.)
 
 ### Changed
+
+- **Behaviour change: an invalid `cacheTtl` now throws at `configure()` time
+  (sc-970).** `cache_ttl` now follows one rule, decided for the JS, Java,
+  Elixir, Python and Rails SDKs alike: omitted means the default of 300
+  seconds, `0` disables the cache, a positive integer is that many seconds,
+  and anything else throws a `ConfigurationError`. `configure()` throws before
+  applying any key from that call, the same all-or-nothing rule an unknown
+  key already gets. Assigning `epb.config.cacheTtl` directly is checked too
+  (there `undefined` is refused as well, since it only means "omitted" as a
+  `configure()` key), and a refused value leaves the previous one in place.
+
+  | `cacheTtl` | before | now |
+  | --- | --- | --- |
+  | omitted / `undefined`, `0`, a positive integer | as documented | unchanged |
+  | `null` | stored; the cache silently used 300 instead | throws |
+  | a negative number, e.g. `-5` | silently disabled the cache, like `0` | throws |
+  | a float, e.g. `3.5` | used as a fractional TTL | throws |
+  | a numeric string, e.g. `'300'` | coerced, and worked as 300 | throws |
+  | a non-numeric string, e.g. `'abc'`, or `NaN` | stored; every entry got a `NaN` expiry and could never be hit, so the cache was silently off while still accepting writes | throws |
+
+  **Migration:** drop `cacheTtl: null` and let the default apply; replace a
+  negative value with `0`; pass a number, not a string — a value read from an
+  environment variable has to be converted first.
 
 - **Behaviour change: `configure` now throws on an unknown key.** It used to
   iterate its own list of valid keys and ignore everything else in `opts`, so a

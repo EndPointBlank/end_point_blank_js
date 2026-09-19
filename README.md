@@ -79,7 +79,7 @@ variable > default.**
 | `versionFinder` | — | `null` | `(req) => string \| null`, overrides automatic endpoint-version detection. |
 | `logMode` | — | `LogMode.DIRECT` | `LogMode.DIRECT` (synchronous POST) or `LogMode.DELAYED` (queued, flushed in the background, batches of 4, bounded at 1000 queued items). |
 | `tokenTtl` | — | `null` | Seconds; sent as `token_ttl` when requesting an access token, if set. |
-| `cacheTtl` | — | `300` | Seconds; TTL for the authentication-cache entries used by the `authorized` Express guard (`authenticated` never reads or writes this cache). Re-read on every cache lookup (see note below); `<= 0` disables the cache, and the next lookup or write made in *this process* while disabled clears that process's whole cache, not only itself — see the per-process note below. |
+| `cacheTtl` | — | `300` | Seconds, a non-negative integer; TTL for the authentication-cache entries used by the `authorized` Express guard (`authenticated` never reads or writes this cache). Omit it for the default; `0` disables the cache; `null`, a negative number or a non-integer throws — see [`cacheTtl` values](#cachettl-values). Re-read on every cache lookup (see note below); while it is `0`, the next lookup or write made in *this process* clears that process's whole cache, not only itself — see the per-process note below. |
 | `trustProxyHeaders` | — | `true` | Whether the per-request `scheme`/`host`/`port` report honors `X-Forwarded-Proto`/`-Host`/`-Port`. See [Reported base URL](#reported-base-url). |
 | `workerCount` | — | `4` | Number of concurrent in-flight batch requests `LogMode.DELAYED` uses when draining its background queue (Node is single-threaded, so this is concurrent `setImmediate`/async work rather than OS threads — the closest analog to the Ruby gem's threaded writer pool). |
 | `maskingRules` | — | `[]` | See [Data masking](#data-masking). |
@@ -94,6 +94,26 @@ no column for one, and derives a call's environment from the credential it prese
 There is no env-var fallback for `applicationVersion`, `versionFinder`, `logMode`, `tokenTtl`,
 `cacheTtl`, `trustProxyHeaders`, `workerCount`, `maskingRules`, or `maskHook` — those must be
 set via `configure()`.
+
+### `cacheTtl` values
+
+`cacheTtl` follows the `cache_ttl` rule decided for all five EndPointBlank SDKs (JS, Java,
+Elixir, Python, Rails) in sc-970:
+
+| Value | Result |
+|---|---|
+| omitted (or `undefined`) | left as it is: the default of 300 seconds, unless an earlier `configure()` call set it |
+| `0` | the authentication cache is disabled |
+| a positive integer | that many seconds |
+| `null` | throws `ConfigurationError` — omit the key instead to get the default |
+| a negative number | throws `ConfigurationError` — use `0` to disable the cache |
+| anything that is not an integer — a float such as `3.5`, a string (even `'300'`), `NaN`, `Infinity`, a boolean | throws `ConfigurationError` |
+
+The error comes from `configure()` itself, before anything from that call is applied, not from
+the first cache lookup. Assigning `epb.config.cacheTtl` directly is checked the same way, except
+that `undefined` is refused there as well: it means "omitted" only as a `configure()` key. A
+refused value leaves the previous one in place. A value read from an environment variable is a
+string, so convert it to a number before passing it.
 
 ### Reported base URL
 
@@ -198,7 +218,8 @@ for entries already cached:
   sooner during an incident, without waiting out the original TTL.
 - **Raising it** never extends an entry past the expiry it was written with; only entries
   written after the change get the longer TTL.
-- **Setting it to `0` or lower disables the cache.** The *next* thing that actually touches the
+- **Setting it to `0` disables the cache.** (A negative value is refused — see
+  [`cacheTtl` values](#cachettl-values).) The *next* thing that actually touches the
   cache while it is disabled clears the **entire** cache — every entry, not only the one that
   call happened to look up or write — and inserts nothing if it was a store. That "next thing"
   is specifically: **an `authorized` request** (it is the only one of the two Express guards
@@ -231,7 +252,7 @@ for entries already cached:
   Concretely: "disable, let a request through, re-enable" flushes only the process(es) that
   actually go through all three steps *themselves* — it does not flush a fleet as a unit, and
   nothing here coordinates that across processes. For a given worker's cache to clear, that
-  worker must (1) have `cacheTtl` set to `<= 0` in its own memory, (2) itself handle an
+  worker must (1) have `cacheTtl` set to `0` in its own memory, (2) itself handle an
   `authorized` request (or a direct cache call) while it is in that state, and (3) only then have
   `cacheTtl` set back to a positive value. If `configure({ cacheTtl: 0 })` only reaches one
   worker (an admin action routed to a single process, for example), or a worker gets no

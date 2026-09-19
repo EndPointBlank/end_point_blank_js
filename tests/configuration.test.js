@@ -94,8 +94,190 @@ describe('configure refuses unknown keys', () => {
   });
 
   test('every valid key is accepted', () => {
-    const opts = Object.fromEntries(VALID_KEYS.map((key) => [key, null]));
+    // `null` for everything except `cacheTtl`, which refuses an explicit
+    // `null` by design (sc-970 -- see the cacheTtl contract below).
+    const opts = { ...Object.fromEntries(VALID_KEYS.map((key) => [key, null])), cacheTtl: 300 };
     expect(() => epb.configure(opts)).not.toThrow();
+  });
+});
+
+// sc-970: the one `cache_ttl` rule decided for the JS, Java, Elixir, Python
+// and Rails SDKs. Omitted means the 300s default; `0` means the cache is
+// disabled; an explicit `null`, a negative number, or anything that is not an
+// integer is refused with a ConfigurationError at configure time -- not
+// silently defaulted, and not left to misbehave at first cache use.
+describe('sc-970: the cacheTtl contract', () => {
+  const { instance: cache } = require('../src/commands/authentication-cache');
+
+  beforeEach(() => cache.clear());
+  afterEach(() => cache.clear());
+
+  const thrownBy = (fn) => {
+    try {
+      fn();
+    } catch (err) {
+      return err;
+    }
+    throw new Error('expected a throw, but none happened');
+  };
+
+  describe('omitted', () => {
+    test('configure() without cacheTtl leaves the 300s default', () => {
+      epb.configure({ clientId: 'my-id' });
+      expect(config.cacheTtl).toBe(300);
+    });
+
+    test('an explicitly undefined cacheTtl is treated as omitted, like every other configure() key', () => {
+      // `{ cacheTtl: process.env.EPB_CACHE_TTL }` with the variable unset.
+      expect(() => epb.configure({ cacheTtl: undefined })).not.toThrow();
+      expect(config.cacheTtl).toBe(300);
+    });
+
+    test('the default actually caches for 300s', () => {
+      jest.useFakeTimers();
+      try {
+        epb.configure({});
+        cache.store('key', 'credentials');
+
+        jest.advanceTimersByTime(299_000);
+        expect(cache.retrieve('key')).toBe('credentials');
+
+        jest.advanceTimersByTime(2_000);
+        expect(cache.retrieve('key')).toBeNull();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+  });
+
+  describe('explicit null', () => {
+    test('configure() throws a ConfigurationError naming cacheTtl and telling you to omit it for the default', () => {
+      const err = thrownBy(() => epb.configure({ cacheTtl: null }));
+      expect(err).toBeInstanceOf(ConfigurationError);
+      expect(err).toBeInstanceOf(epb.ConfigurationError);
+      expect(err.message).toContain('cacheTtl');
+      expect(err.message).toContain('null');
+      expect(err.message).toMatch(/omit/i);
+      expect(err.message).toContain('300');
+    });
+
+    test('direct assignment on the exported config object throws too, and keeps the previous value', () => {
+      // `epb.config` is public; it must not be a way around the rule.
+      expect(() => { epb.config.cacheTtl = null; }).toThrow(ConfigurationError);
+      expect(config.cacheTtl).toBe(300);
+    });
+  });
+
+  describe('direct assignment of undefined', () => {
+    // configure() skips an undefined key (see 'omitted' above), but assigning
+    // `undefined` to the property is an explicit write of a non-value. The
+    // cache reads `config.cacheTtl` with no fallback, so a stored `undefined`
+    // would give every entry a NaN expiry: written, counted, never a hit.
+    test('throws and keeps the previous value', () => {
+      const err = thrownBy(() => { epb.config.cacheTtl = undefined; });
+      expect(err).toBeInstanceOf(ConfigurationError);
+      expect(err.message).toContain('cacheTtl');
+      expect(err.message).toContain('undefined');
+      expect(config.cacheTtl).toBe(300);
+    });
+
+    test('leaves the cache working at the previous ttl', () => {
+      expect(() => { epb.config.cacheTtl = undefined; }).toThrow(ConfigurationError);
+
+      cache.store('key', 'credentials');
+      expect(cache.retrieve('key')).toBe('credentials');
+    });
+  });
+
+  describe('0 disables the cache (unchanged)', () => {
+    test('is accepted', () => {
+      expect(() => epb.configure({ cacheTtl: 0 })).not.toThrow();
+      expect(config.cacheTtl).toBe(0);
+    });
+
+    test('means nothing is cached', () => {
+      epb.configure({ cacheTtl: 0 });
+      cache.store('key', 'credentials');
+
+      expect(cache.size()).toBe(0);
+      expect(cache.retrieve('key')).toBeNull();
+    });
+
+    test('-0 is 0, not a negative number: accepted, and disables the cache', () => {
+      // A deliberate decision: `Number.isInteger(-0)` is true and `-0 < 0` is
+      // false. (The other four SDKs have no integer -0 to decide about.)
+      expect(() => epb.configure({ cacheTtl: -0 })).not.toThrow();
+      cache.store('key', 'credentials');
+
+      expect(cache.size()).toBe(0);
+      expect(cache.retrieve('key')).toBeNull();
+    });
+  });
+
+  describe('a positive integer', () => {
+    test('is accepted as-is', () => {
+      epb.configure({ cacheTtl: 60 });
+      expect(config.cacheTtl).toBe(60);
+    });
+  });
+
+  describe('invalid values throw at configure time', () => {
+    test('a negative number throws, rather than silently disabling the cache as it used to', () => {
+      const err = thrownBy(() => epb.configure({ cacheTtl: -5 }));
+      expect(err).toBeInstanceOf(ConfigurationError);
+      expect(err.message).toContain('cacheTtl');
+      expect(err.message).toContain('-5');
+    });
+
+    // A string is quoted in the message, so '"300"' is distinguishable from
+    // the "default of 300 seconds" the message also mentions.
+    test.each([
+      ['a non-numeric string', 'abc', '"abc"'],
+      ['a numeric string', '300', '"300"'],
+      ['a float', 3.5, '3.5'],
+      ['NaN', NaN, 'NaN'],
+      ['Infinity', Infinity, 'Infinity'],
+      ['a boolean', true, 'true'],
+      ['an array', [300], 'a value of type array'],
+      // Neither of these can be turned into a string with `${value}`. The
+      // message must still be built, or the caller gets a TypeError from
+      // inside the error path instead of the ConfigurationError.
+      ['an object with no prototype', Object.create(null), 'a value of type object'],
+      ['a symbol', Symbol('ttl'), 'a value of type symbol'],
+    ])('%s throws', (_label, value, shownAs) => {
+      const err = thrownBy(() => epb.configure({ cacheTtl: value }));
+      expect(err).toBeInstanceOf(ConfigurationError);
+      expect(err.message).toContain('cacheTtl');
+      expect(err.message).toContain(shownAs);
+    });
+
+    test.each([
+      ['null', null],
+      ['a negative number', -5],
+      ['a string', 'abc'],
+      ['a float', 3.5],
+    ])('%s is refused without replacing the previously configured value', (_label, value) => {
+      epb.configure({ cacheTtl: 60 });
+
+      expect(() => epb.configure({ cacheTtl: value })).toThrow(ConfigurationError);
+      expect(config.cacheTtl).toBe(60);
+    });
+
+    // The same all-or-nothing rule an unknown key gets: a caller that catches
+    // the error must not be left half-configured. The other key has to be one
+    // configure() assigns before cacheTtl, or the cacheTtl setter's own throw
+    // would stop the loop before reaching it anyway; applicationVersion is,
+    // and has no env-var fallback to muddy the read. `null` is here as well
+    // as `-5` so a pre-check that skips null (`!= null`) is caught too.
+    test.each([
+      ['a negative number', -5],
+      ['null', null],
+    ])('a bad cacheTtl (%s) applies nothing else from the same configure() call', (_label, value) => {
+      expect(() => epb.configure({ applicationVersion: '3.4.1', cacheTtl: value }))
+        .toThrow(ConfigurationError);
+      expect(config.applicationVersion).toBeNull();
+      expect(config.cacheTtl).toBe(300);
+    });
   });
 });
 
