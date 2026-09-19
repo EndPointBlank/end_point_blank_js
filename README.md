@@ -110,7 +110,8 @@ Elixir, Python, Rails) in sc-970:
 | anything that is not an integer — a float such as `3.5`, a string (even `'300'`), `NaN`, `Infinity`, a boolean | throws `ConfigurationError` |
 
 The error comes from `configure()` itself, before anything from that call is applied, not from
-the first cache lookup. Assigning `epb.config.cacheTtl` directly is checked the same way, and a
+the first cache lookup. Assigning `epb.config.cacheTtl` directly is checked the same way, except
+that `undefined` is refused there as well: it means "omitted" only as a `configure()` key. A
 refused value leaves the previous one in place. A value read from an environment variable is a
 string, so convert it to a number before passing it.
 

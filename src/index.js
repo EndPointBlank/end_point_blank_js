@@ -99,11 +99,13 @@ module.exports = {
   VERSION,
   LogMode,
   UnauthorizedError,
-  // Thrown from a baseUrl/logBaseUrl getter on first read if the configured
-  // value can never produce a working URL. Re-exported here, next to
-  // UnauthorizedError, so a caller catching this breaking-change throw does
-  // not have to reach into src/configuration -- the path this package's
-  // public surface otherwise refuses to make people take.
+  // Thrown by configure() for an unknown key or an invalid cacheTtl, by the
+  // cacheTtl setter on direct assignment, and from a baseUrl/logBaseUrl
+  // getter on first read if the configured value can never produce a working
+  // URL. Re-exported here, next to UnauthorizedError, so a caller catching
+  // one of these breaking-change throws does not have to reach into
+  // src/configuration -- the path this package's public surface otherwise
+  // refuses to make people take.
   ConfigurationError,
   // How a token request came back, for callers that branch on it. Surfaced
   // here for the same reason LogMode is: it is a constant a consumer has to

@@ -84,9 +84,12 @@ function describeValue(value) {
  *   unless an earlier call set one -- stays in place.
  * - `0`: the authentication cache is disabled.
  * - a positive integer: that many seconds.
- * - anything else -- an explicit `null`, a negative number, or a value that
- *   is not an integer (a float, a string even if numeric, `NaN`, `Infinity`,
- *   a boolean) -- throws {@link ConfigurationError}.
+ * - anything else -- an explicit `null`, `undefined` assigned directly to the
+ *   property, a negative number, or a value that is not an integer (a float,
+ *   a string even if numeric, `NaN`, `Infinity`, a boolean) -- throws
+ *   {@link ConfigurationError}. Refusing a directly assigned `undefined`
+ *   matters: the cache reads `cacheTtl` with no fallback, so a stored
+ *   `undefined` would silently turn it off while it kept accepting writes.
  *
  * Called by the `cacheTtl` setter, and by `configure()` before it assigns
  * anything, so a bad value is refused when it is configured rather than

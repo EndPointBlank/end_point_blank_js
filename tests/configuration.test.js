@@ -168,6 +168,27 @@ describe('sc-970: the cacheTtl contract', () => {
     });
   });
 
+  describe('direct assignment of undefined', () => {
+    // configure() skips an undefined key (see 'omitted' above), but assigning
+    // `undefined` to the property is an explicit write of a non-value. The
+    // cache reads `config.cacheTtl` with no fallback, so a stored `undefined`
+    // would give every entry a NaN expiry: written, counted, never a hit.
+    test('throws and keeps the previous value', () => {
+      const err = thrownBy(() => { epb.config.cacheTtl = undefined; });
+      expect(err).toBeInstanceOf(ConfigurationError);
+      expect(err.message).toContain('cacheTtl');
+      expect(err.message).toContain('undefined');
+      expect(config.cacheTtl).toBe(300);
+    });
+
+    test('leaves the cache working at the previous ttl', () => {
+      expect(() => { epb.config.cacheTtl = undefined; }).toThrow(ConfigurationError);
+
+      cache.store('key', 'credentials');
+      expect(cache.retrieve('key')).toBe('credentials');
+    });
+  });
+
   describe('0 disables the cache (unchanged)', () => {
     test('is accepted', () => {
       expect(() => epb.configure({ cacheTtl: 0 })).not.toThrow();
@@ -176,6 +197,16 @@ describe('sc-970: the cacheTtl contract', () => {
 
     test('means nothing is cached', () => {
       epb.configure({ cacheTtl: 0 });
+      cache.store('key', 'credentials');
+
+      expect(cache.size()).toBe(0);
+      expect(cache.retrieve('key')).toBeNull();
+    });
+
+    test('-0 is 0, not a negative number: accepted, and disables the cache', () => {
+      // A deliberate decision: `Number.isInteger(-0)` is true and `-0 < 0` is
+      // false. (The other four SDKs have no integer -0 to decide about.)
+      expect(() => epb.configure({ cacheTtl: -0 })).not.toThrow();
       cache.store('key', 'credentials');
 
       expect(cache.size()).toBe(0);
@@ -232,13 +263,17 @@ describe('sc-970: the cacheTtl contract', () => {
       expect(config.cacheTtl).toBe(60);
     });
 
-    test('a bad cacheTtl applies nothing else from the same configure() call', () => {
-      // The same all-or-nothing rule an unknown key gets: a caller that
-      // catches the error must not be left half-configured. The other key
-      // has to be one configure() assigns before cacheTtl, or the cacheTtl
-      // setter's own throw would stop the loop before reaching it anyway;
-      // applicationVersion is, and has no env-var fallback to muddy the read.
-      expect(() => epb.configure({ applicationVersion: '3.4.1', cacheTtl: -5 }))
+    // The same all-or-nothing rule an unknown key gets: a caller that catches
+    // the error must not be left half-configured. The other key has to be one
+    // configure() assigns before cacheTtl, or the cacheTtl setter's own throw
+    // would stop the loop before reaching it anyway; applicationVersion is,
+    // and has no env-var fallback to muddy the read. `null` is here as well
+    // as `-5` so a pre-check that skips null (`!= null`) is caught too.
+    test.each([
+      ['a negative number', -5],
+      ['null', null],
+    ])('a bad cacheTtl (%s) applies nothing else from the same configure() call', (_label, value) => {
+      expect(() => epb.configure({ applicationVersion: '3.4.1', cacheTtl: value }))
         .toThrow(ConfigurationError);
       expect(config.applicationVersion).toBeNull();
       expect(config.cacheTtl).toBe(300);
