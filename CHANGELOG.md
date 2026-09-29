@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Security
+
+- **BREAKING: `Authorization.header(baseUrl)` no longer falls back to HTTP
+  Basic (sc-1469).** It used to answer `Bearer <token>` when a token could be
+  minted and silently answer `Basic base64(clientId:clientSecret)` when it
+  could not (token mint rejected, intake outage or timeout, 401), and
+  `header()` with no URL always answered Basic. Either way a client could end
+  up sending its own credential to the provider it was calling. A client must
+  never send its `clientId`/`clientSecret` to a provider, so:
+
+  - `header(baseUrl)` now answers `Bearer <token>` or rejects with the new
+    `TokenUnavailableError` (exported from the package entry point). The
+    error carries `baseUrl`, `outcome` (a `TokenOutcome` value, or `null`
+    when the mint threw -- the original error is then `cause`) and `status`,
+    and its message says why no token could be minted and that credentials
+    are never sent to providers.
+  - `header()` with no, `null` or empty URL now throws a `TypeError`. There is
+    no credential-based form for outbound calls any more.
+  - The SDK's own calls to EndPointBlank intake (authenticate, authorize,
+    token minting, endpoint updates, log/request/response/error writers) keep
+    using Basic, now through the internal `Authorization.intakeHeader()`.
+    Do not use it for calls to a provider.
+
+  **What a caller must change:** wrap `await Authorization.header(url)` in a
+  `try`/`catch` for `TokenUnavailableError` and fail (or retry later) instead
+  of calling the provider; remove any `Authorization.header()` call made with
+  no URL. Code that relied on the Basic fallback to keep a provider call
+  working through an intake outage will now see the error instead.
+
 ### Unchanged
 
 - **`configure()` is already all-or-nothing (sc-1266, a follow-up to sc-970).**

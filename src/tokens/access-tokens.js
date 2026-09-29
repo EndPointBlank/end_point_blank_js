@@ -152,9 +152,9 @@ class AccessTokens {
 
     if (result.outcome === TokenOutcome.CREDENTIAL_REJECTED) {
       // Deliberately not the generic line below. This one will not fix
-      // itself: every subsequent request mints, gets another 401, and hands
-      // the caller a Basic fallback it never asked for, until somebody reads
-      // this and acts on it.
+      // itself: every subsequent request mints, gets another 401, and
+      // `Authorization.header()` throws TokenUnavailableError for it, until
+      // somebody reads this and acts on it.
       console.error(
         `[EndPointBlank] Access token request for ${baseUrl} was REJECTED (HTTP 401): ` +
           'the client credential is invalid or revoked. Retrying cannot help -- ' +

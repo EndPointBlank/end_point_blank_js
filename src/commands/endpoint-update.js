@@ -46,7 +46,7 @@ class EndpointUpdate {
         `app_version=${data.app_version}`
     );
 
-    const authHeader = await Authorization.header();
+    const authHeader = Authorization.intakeHeader();
     const response = await post(config.endpointUpdateUrl, authHeader, data);
     if (!response) return;
     if (response.status > 299) {

@@ -121,7 +121,7 @@ const GenerateAccessToken = {
       body.token_ttl = config.tokenTtl;
     }
 
-    const authHeader = await Authorization.header();
+    const authHeader = Authorization.intakeHeader();
     const response = await post(config.accessTokenUrl, authHeader, body);
 
     // TRANSPORT_ERROR means one thing and only one thing: no usable HTTP

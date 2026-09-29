@@ -29,7 +29,7 @@ const BasicAuthenticate = {
       `[EndPointBlank] Authenticating request: ${method} ${url} with client_auth: ${clientAuth}`,
     );
 
-    const authHeader = await Authorization.header();
+    const authHeader = Authorization.intakeHeader();
     // The key names are intake's, not this SDK's choice. `POST /authorize`
     // reads `client_auth`, `path`, `http_method`, `endpoint_version` and
     // `source_ip`, and ignores every other key in the body — so a misspelling
