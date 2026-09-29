@@ -68,9 +68,9 @@ afterEach(() => {
 function expectBasicOnlyToIntake() {
   for (const { url, authorization } of requests) {
     if (typeof authorization === 'string' && authorization.startsWith('Basic ')) {
-      expect(url.startsWith(`${INTAKE}/`)).toBe(true);
+      expect(new URL(url).origin).toBe(new URL(INTAKE).origin);
     }
-    expect(url.startsWith('https://api.provider.test')).toBe(false);
+    expect(new URL(url).host).not.toBe('api.provider.test');
   }
 }
 
