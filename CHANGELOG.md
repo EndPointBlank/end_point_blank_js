@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-### Security
+### Breaking changes
 
 - **BREAKING: `Authorization.header(baseUrl)` no longer falls back to HTTP
   Basic (sc-1469).** It used to answer `Bearer <token>` when a token could be
@@ -17,7 +17,9 @@
     error carries `baseUrl`, `outcome` (a `TokenOutcome` value, or `null`
     when the mint threw -- the original error is then `cause`) and `status`,
     and its message says why no token could be minted and that credentials
-    are never sent to providers.
+    are never sent to providers. A mint that threw is reported as "the token
+    request failed unexpectedly"; the thrown error's own text stays on
+    `cause` and is not copied into the message.
   - `header()` with no, `null` or empty URL now throws a `TypeError`. There is
     no credential-based form for outbound calls any more.
   - The SDK's own calls to EndPointBlank intake (authenticate, authorize,
@@ -30,6 +32,12 @@
   of calling the provider; remove any `Authorization.header()` call made with
   no URL. Code that relied on the Basic fallback to keep a provider call
   working through an intake outage will now see the error instead.
+
+- **`BearerGenerate` is deprecated (sc-1469).** Its header carries this
+  service's own `clientId:clientSecret` and is only valid for its own intake;
+  never send it to a provider. Use `Authorization.header(url)` for outbound
+  calls. `generate()`/`authHeader()` emit a one-time `DeprecationWarning` on
+  first use.
 
 ### Unchanged
 

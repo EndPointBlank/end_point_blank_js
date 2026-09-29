@@ -22,6 +22,9 @@ const { TokenUnavailableError } = epb;
 const INTAKE = 'https://intake.epb.test';
 const PROVIDER_URL = 'https://api.provider.test/orders';
 const SECRET = 'test-client-secret';
+const TAIL =
+  "EndPointBlank never sends this service's client_id/client_secret to a provider, " +
+  'so there is no Basic-auth fallback and the call must not be made without a token.';
 const BASIC = `Basic ${Buffer.from(`test-client-id:${SECRET}`).toString('base64')}`;
 
 let requests;
@@ -122,9 +125,11 @@ describe('header(baseUrl): outbound calls to a provider', () => {
       expect(err.outcome).toBe(outcome);
       expect(err.status).toBe(status);
       expect(err.baseUrl).toBe(PROVIDER_URL);
-      expect(err.message).toMatch(`No access token could be minted for ${PROVIDER_URL}`);
+      expect(err.message.startsWith(
+        `Could not mint an EndPointBlank access token for ${PROVIDER_URL}: `,
+      )).toBe(true);
       expect(err.message).toMatch(why);
-      expect(err.message).toMatch(/credentials are never sent to a provider/);
+      expect(err.message.endsWith(TAIL)).toBe(true);
       expect(err.message).not.toContain(SECRET);
       expect(err.message).not.toContain(Authorization.basicCredentials());
       expectBasicOnlyToIntake();
@@ -160,14 +165,20 @@ describe('header(baseUrl): outbound calls to a provider', () => {
 
     test('a mint that throws is wrapped, with the original as cause', async () => {
       const boom = new Error('socket hang up');
-      jest.spyOn(AccessTokens, 'token').mockRejectedValue(boom);
+      jest.spyOn(AccessTokens, 'tokenWithResult').mockRejectedValue(boom);
 
       const err = await Authorization.header(PROVIDER_URL).catch(e => e);
 
       expect(err).toBeInstanceOf(TokenUnavailableError);
       expect(err.outcome).toBeNull();
+      expect(err.status).toBeNull();
       expect(err.cause).toBe(boom);
-      expect(err.message).toMatch(/the token request failed: socket hang up/);
+      expect(err.message).toBe(
+        `Could not mint an EndPointBlank access token for ${PROVIDER_URL}: ` +
+          `the token request failed unexpectedly. ${TAIL}`,
+      );
+      // The cause's own text stays on the cause, not in this message.
+      expect(err.message).not.toContain('socket hang up');
     });
 
     test('a token revoked mid-flight is not replaced by Basic on the next call', async () => {
@@ -178,6 +189,66 @@ describe('header(baseUrl): outbound calls to a provider', () => {
       respondWith(() => json(401, { error: 'invalid_credentials' }));
 
       await expect(Authorization.header(PROVIDER_URL)).rejects.toBeInstanceOf(TokenUnavailableError);
+      expectBasicOnlyToIntake();
+    });
+
+    test('the reason comes from this call, not from lastFailure() read afterwards', async () => {
+      respondWith(() => json(503, { error: 'down' }));
+      // A concurrent call clearing or replacing the shared record between the
+      // mint and the throw must not change what this call reports.
+      jest.spyOn(AccessTokens, 'lastFailure').mockReturnValue(
+        { outcome: TokenOutcome.CREDENTIAL_REJECTED, status: 401 },
+      );
+
+      const err = await Authorization.header(PROVIDER_URL).catch(e => e);
+
+      expect(err.outcome).toBe(TokenOutcome.SERVER_ERROR);
+      expect(err.status).toBe(503);
+      expect(AccessTokens.lastFailure).not.toHaveBeenCalled();
+    });
+
+    test('lastFailure() still records the failed mint for other readers', async () => {
+      respondWith(() => json(422, { error: 'no grant' }));
+
+      await Authorization.header(PROVIDER_URL).catch(() => {});
+
+      expect(AccessTokens.lastFailure(PROVIDER_URL)).toEqual(
+        { outcome: TokenOutcome.REQUEST_REJECTED, status: 422 },
+      );
+    });
+  });
+
+  describe('host code: build the header, then call the provider', () => {
+    // Models the documented pattern: the provider request is only made once
+    // header() has produced a value, so a failed mint means no provider call.
+    async function callProvider() {
+      const authorization = await Authorization.header(PROVIDER_URL);
+      return globalThis.fetch(PROVIDER_URL, { headers: { Authorization: authorization } });
+    }
+
+    const providerRequests = () =>
+      requests.filter(({ url }) => new URL(url).host === 'api.provider.test');
+
+    test('on failure the provider receives nothing', async () => {
+      respondWith(url => (url.startsWith(INTAKE) ? json(401, { error: 'invalid_credentials' }) : json(200, {})));
+
+      await expect(callProvider()).rejects.toBeInstanceOf(TokenUnavailableError);
+
+      expect(providerRequests()).toEqual([]);
+      expectBasicOnlyToIntake();
+    });
+
+    test('on success the provider receives Bearer, never Basic', async () => {
+      respondWith(url => (url.startsWith(INTAKE) ? minted('tok-1') : json(200, {})));
+
+      await callProvider();
+
+      expect(providerRequests()).toEqual([{ url: PROVIDER_URL, authorization: 'Bearer tok-1' }]);
+      for (const { url, authorization } of requests) {
+        if (authorization && authorization.startsWith('Basic ')) {
+          expect(new URL(url).origin).toBe(new URL(INTAKE).origin);
+        }
+      }
     });
   });
 

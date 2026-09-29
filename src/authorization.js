@@ -43,18 +43,21 @@ const Authorization = {
     }
 
     const { AccessTokens } = require('./tokens/access-tokens');
+    // The reason is read off this call's own attempt, not off
+    // AccessTokens.lastFailure() afterwards: that record is shared per URL,
+    // and a concurrent call could have replaced or cleared it in between.
     let token;
+    let result;
     try {
-      token = await AccessTokens.token(baseUrl);
+      ({ token, result } = await AccessTokens.tokenWithResult(baseUrl));
     } catch (err) {
       throw new TokenUnavailableError(baseUrl, { cause: err });
     }
     if (token) return `Bearer ${token}`;
 
-    const failure = AccessTokens.lastFailure(baseUrl);
     throw new TokenUnavailableError(baseUrl, {
-      outcome: failure ? failure.outcome : null,
-      status: failure ? failure.status : null,
+      outcome: result ? result.outcome : null,
+      status: result ? result.status : null,
     });
   },
 

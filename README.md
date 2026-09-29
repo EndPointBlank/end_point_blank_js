@@ -342,10 +342,10 @@ try {
 The error's message says which of these happened, for example:
 
 ```
-[EndPointBlank] No access token could be minted for https://api.example.com/orders: intake could
-not be reached (timeout, connection refused or retries exhausted); this may be transient. No
-Authorization header was produced: this application's client credentials are never sent to a
-provider.
+Could not mint an EndPointBlank access token for https://api.example.com/orders: intake could
+not be reached (timeout, connection refused or retries exhausted); this may be transient.
+EndPointBlank never sends this service's client_id/client_secret to a provider, so there is no
+Basic-auth fallback and the call must not be made without a token.
 ```
 
 The argument is the URL you are about to call. Intake matches it against the registered base URLs

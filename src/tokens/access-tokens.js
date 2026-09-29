@@ -39,7 +39,7 @@ class AccessTokens {
   constructor() {
     /** @type {Map<string, {token: string, expiredAt: Date}>} */
     this._entries = new Map();
-    /** @type {Map<string, Promise<string|null>>} */
+    /** @type {Map<string, Promise<{token: string|null, result: object|null}>>} */
     this._inflight = new Map();
     /** @type {Map<string, {outcome: string, status: number|null}>} */
     this._failures = new Map();
@@ -57,9 +57,27 @@ class AccessTokens {
    *   `base_url`.
    */
   async token(baseUrl) {
+    return (await this.tokenWithResult(baseUrl)).token;
+  }
+
+  /**
+   * Like {@link AccessTokens#token}, but also answers how *this* call's token
+   * was obtained, so a caller can explain a failure from its own attempt
+   * rather than reading {@link AccessTokens#lastFailure} afterwards -- by
+   * which time a concurrent call for the same URL may have overwritten or
+   * cleared the record (sc-1469).
+   *
+   * A caller that joined an in-flight exchange shares that exchange's result,
+   * which is the attempt its token (or lack of one) came from.
+   *
+   * @param {string} baseUrl as for {@link AccessTokens#token}.
+   * @returns {Promise<{token: string|null, result: {outcome: string, status: number|null}|null}>}
+   *   `result` is `null` when a cached token was used and no mint ran.
+   */
+  async tokenWithResult(baseUrl) {
     const entry = this._match(baseUrl);
     if (usable(entry)) {
-      return entry.token;
+      return { token: entry.token, result: null };
     }
 
     // Coalesce concurrent exchanges for the same requested URL.
@@ -129,7 +147,7 @@ class AccessTokens {
       // Whatever went wrong before is over; a stale record would have a
       // caller acting on an outage that has already ended.
       this._failures.delete(baseUrl);
-      return payload.token;
+      return { token: payload.token, result: outcomeOf(result) };
     }
 
     // A failed refresh must not leave an expiring token behind claiming to be
@@ -160,13 +178,13 @@ class AccessTokens {
           'the client credential is invalid or revoked. Retrying cannot help -- ' +
           're-issue the credential and update this application\'s configuration.',
       );
-      return null;
+      return { token: null, result: outcomeOf(result) };
     }
 
     console.error(
       `[EndPointBlank] Failed to generate access token for ${baseUrl}: ${failureReason(result)}`,
     );
-    return null;
+    return { token: null, result: outcomeOf(result) };
   }
 
   /**
@@ -280,6 +298,14 @@ class AccessTokens {
   }
 }
 
+/** The part of a mint's result a caller may act on: never the payload. */
+function outcomeOf(result) {
+  return Object.freeze({
+    outcome: result.outcome,
+    status: result.status != null ? result.status : null,
+  });
+}
+
 function usable(entry) {
   return Boolean(entry && entry.expiredAt > new Date(Date.now() + REFRESH_BUFFER_MS));
 }
@@ -360,6 +386,7 @@ const instance = new AccessTokens();
 module.exports = {
   AccessTokens: {
     token: (baseUrl) => instance.token(baseUrl),
+    tokenWithResult: (baseUrl) => instance.tokenWithResult(baseUrl),
     exists: (baseUrl) => instance.exists(baseUrl),
     invalidate: (staleToken) => instance.invalidate(staleToken),
     lastFailure: (baseUrl) => instance.lastFailure(baseUrl),

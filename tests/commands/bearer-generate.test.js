@@ -25,3 +25,35 @@ test('authHeader contains correctly encoded credentials', () => {
   const decoded = Buffer.from(header.slice(6), 'base64').toString();
   expect(decoded).toBe('test-id:test-secret');
 });
+
+describe('deprecation (sc-1469)', () => {
+  const {
+    _resetDeprecationWarning,
+    DEPRECATION_MESSAGE,
+  } = require('../../src/commands/bearer-generate');
+
+  beforeEach(() => _resetDeprecationWarning());
+  afterEach(() => jest.restoreAllMocks());
+
+  test('emits one DeprecationWarning, on the first call only', () => {
+    const emit = jest.spyOn(process, 'emitWarning').mockImplementation(() => {});
+
+    BearerGenerate.authHeader();
+    BearerGenerate.generate();
+    BearerGenerate.authHeader();
+
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenCalledWith(DEPRECATION_MESSAGE, 'DeprecationWarning');
+    expect(DEPRECATION_MESSAGE).toMatch(/never send it to a provider/i);
+    expect(DEPRECATION_MESSAGE).toMatch(/Authorization\.header\(url\)/);
+  });
+
+  test('generate() alone also triggers it', () => {
+    const emit = jest.spyOn(process, 'emitWarning').mockImplementation(() => {});
+
+    BearerGenerate.generate();
+    BearerGenerate.generate();
+
+    expect(emit).toHaveBeenCalledTimes(1);
+  });
+});

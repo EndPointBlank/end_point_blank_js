@@ -18,7 +18,8 @@
  * - `baseUrl` — the URL the token was requested for.
  * - `outcome` — one of `TokenOutcome` (`credential_rejected`,
  *   `request_rejected`, `server_error`, `transport_error`), or `null` when the
- *   mint threw before producing an outcome (the original error is `cause`).
+ *   mint threw before producing an outcome (the original error is `cause`;
+ *   its message is deliberately not copied into this one).
  * - `status` — intake's HTTP status, or `null` when none was obtained.
  */
 class TokenUnavailableError extends Error {
@@ -28,10 +29,11 @@ class TokenUnavailableError extends Error {
    */
   constructor(baseUrl, { outcome = null, status = null, cause } = {}) {
     super(
-      `[EndPointBlank] No access token could be minted for ${baseUrl}: ` +
+      `Could not mint an EndPointBlank access token for ${baseUrl}: ` +
         `${reason(outcome, status, cause)}. ` +
-        'No Authorization header was produced: this application\'s client ' +
-        'credentials are never sent to a provider.',
+        'EndPointBlank never sends this service\'s client_id/client_secret ' +
+        'to a provider, so there is no Basic-auth fallback and the call must ' +
+        'not be made without a token.',
       cause !== undefined ? { cause } : undefined,
     );
     this.name = 'TokenUnavailableError';
@@ -56,7 +58,10 @@ function reason(outcome, status, cause) {
       return 'intake could not be reached (timeout, connection refused or ' +
         'retries exhausted); this may be transient';
     default:
-      if (cause && cause.message) return `the token request failed: ${cause.message}`;
+      // Deliberately a fixed phrase: the cause's own message is not copied in
+      // (it is not ours to vouch for and may carry anything). It stays
+      // available, unaltered, on `err.cause`.
+      if (cause !== undefined) return 'the token request failed unexpectedly';
       return 'the token request failed for an unknown reason';
   }
 }
