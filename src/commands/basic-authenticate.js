@@ -25,9 +25,8 @@ const BasicAuthenticate = {
     const method = req.method;
     const url = req.originalUrl || req.url || '';
 
-    log.info(
-      `[EndPointBlank] Authenticating request: ${method} ${url} with client_auth: ${clientAuth}`,
-    );
+    // Never log clientAuth: it is the caller's raw Authorization header (sc-1469).
+    log.info(`[EndPointBlank] Authenticating request: ${method} ${url}`);
 
     const authHeader = await Authorization.header();
     // The key names are intake's, not this SDK's choice. `POST /authorize`
