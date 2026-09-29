@@ -230,7 +230,7 @@ describe('header(baseUrl): outbound calls to a provider', () => {
       requests.filter(({ url }) => new URL(url).host === 'api.provider.test');
 
     test('on failure the provider receives nothing', async () => {
-      respondWith(url => (url.startsWith(INTAKE) ? json(401, { error: 'invalid_credentials' }) : json(200, {})));
+      respondWith(url => (new URL(url).origin === new URL(INTAKE).origin ? json(401, { error: 'invalid_credentials' }) : json(200, {})));
 
       await expect(callProvider()).rejects.toBeInstanceOf(TokenUnavailableError);
 
@@ -239,7 +239,7 @@ describe('header(baseUrl): outbound calls to a provider', () => {
     });
 
     test('on success the provider receives Bearer, never Basic', async () => {
-      respondWith(url => (url.startsWith(INTAKE) ? minted('tok-1') : json(200, {})));
+      respondWith(url => (new URL(url).origin === new URL(INTAKE).origin ? minted('tok-1') : json(200, {})));
 
       await callProvider();
 
