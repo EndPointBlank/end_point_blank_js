@@ -266,6 +266,26 @@ describe('header(baseUrl): outbound calls to a provider', () => {
     expect(requests).toHaveLength(0);
   });
 
+  test('the message never repeats userinfo, query or fragment from the URL', () => {
+    const raw = 'https://user:hunter2@api.provider.test:8443/v1/things?api_key=s3cret#frag';
+    const err = new TokenUnavailableError(raw, { outcome: 'server_error', status: 503 });
+
+    expect(err.message).toContain('for https://api.provider.test:8443/v1/things: ');
+    for (const secret of ['user', 'hunter2', 'api_key', 's3cret', 'frag']) {
+      expect(err.message).not.toContain(secret);
+    }
+    // The caller still gets the URL it passed, unaltered.
+    expect(err.baseUrl).toBe(raw);
+  });
+
+  test('an unparseable URL is left out of the message entirely', () => {
+    const err = new TokenUnavailableError('not a url ?token=s3cret');
+
+    expect(err.message).not.toContain('s3cret');
+    expect(err.message).toContain('could not be parsed');
+    expect(err.baseUrl).toBe('not a url ?token=s3cret');
+  });
+
   test('TokenUnavailableError is exported from the package entry point', () => {
     expect(epb.TokenUnavailableError).toBe(require('../src/authorization').TokenUnavailableError);
     expect(new TokenUnavailableError('https://x.test')).toBeInstanceOf(Error);

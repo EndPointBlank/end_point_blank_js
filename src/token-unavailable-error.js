@@ -15,7 +15,9 @@
  * tell a permanent refusal from a transient outage without parsing the
  * message:
  *
- * - `baseUrl` — the URL the token was requested for.
+ * - `baseUrl` — the URL the token was requested for, exactly as passed. The
+ *   message names only its scheme, host and path (see `describeUrl`), so a
+ *   userinfo or query secret in it stays off `err.message` and out of logs.
  * - `outcome` — one of `TokenOutcome` (`credential_rejected`,
  *   `request_rejected`, `server_error`, `transport_error`), or `null` when the
  *   mint threw before producing an outcome (the original error is `cause`;
@@ -29,7 +31,7 @@ class TokenUnavailableError extends Error {
    */
   constructor(baseUrl, { outcome = null, status = null, cause } = {}) {
     super(
-      `Could not mint an EndPointBlank access token for ${baseUrl}: ` +
+      `Could not mint an EndPointBlank access token for ${describeUrl(baseUrl)}: ` +
         `${reason(outcome, status, cause)}. ` +
         'EndPointBlank never sends this service\'s client_id/client_secret ' +
         'to a provider, so there is no Basic-auth fallback and the call must ' +
@@ -40,6 +42,21 @@ class TokenUnavailableError extends Error {
     this.baseUrl = baseUrl;
     this.outcome = outcome;
     this.status = status;
+  }
+}
+
+/**
+ * The URL as the message may show it: scheme, host and path only. Userinfo,
+ * query and fragment are dropped because the caller controls `baseUrl` and
+ * any of them can carry a secret, and `err.message` is what ends up in logs
+ * and error reporting. The raw value stays on `err.baseUrl`.
+ */
+function describeUrl(baseUrl) {
+  try {
+    const url = new URL(String(baseUrl));
+    return `${url.protocol}//${url.host}${url.pathname}`;
+  } catch {
+    return 'the requested URL (not shown: it could not be parsed)';
   }
 }
 

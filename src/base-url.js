@@ -143,8 +143,8 @@ function _lastHop(value) {
  * concedes no control the caller did not already have.
  *
  * On the authorize path the alternative is worse than cosmetic: resolving to
- * null there drops the request to Basic auth and skips the token mint, where
- * falling through yields a usable application-environment lookup key.
+ * null there sends intake no `target_hostname`, so it has no
+ * application-environment lookup key, where falling through yields one.
  *
  * Python, Java and this library already fell through, because "" is falsy in
  * all three; Ruby and Elixir stopped, because "" is truthy in both. One

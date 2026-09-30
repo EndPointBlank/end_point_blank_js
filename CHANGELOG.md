@@ -17,7 +17,9 @@
     error carries `baseUrl`, `outcome` (a `TokenOutcome` value, or `null`
     when the mint threw -- the original error is then `cause`) and `status`,
     and its message says why no token could be minted and that credentials
-    are never sent to providers. A mint that threw is reported as "the token
+    are never sent to providers. The message names only the URL's scheme,
+    host and path; userinfo, query and fragment stay on `baseUrl` and out of
+    the message. A mint that threw is reported as "the token
     request failed unexpectedly"; the thrown error's own text stays on
     `cause` and is not copied into the message.
   - `header()` with no, `null` or empty URL now throws a `TypeError`. There is
