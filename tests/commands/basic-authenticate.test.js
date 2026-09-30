@@ -207,4 +207,17 @@ describe('BasicAuthenticate.authenticate', () => {
       okResponse,
     );
   });
+
+  it("never writes the caller's Authorization header to a log (sc-1469)", async () => {
+    const written = [];
+    jest.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      written.push(String(chunk));
+      return true;
+    });
+
+    await BasicAuthenticate.authenticate(req(), '/students', 'v1');
+
+    expect(written.join('')).toContain('Authenticating request: POST /api/v1/students');
+    expect(written.join('')).not.toContain('Y2xpZW50');
+  });
 });
