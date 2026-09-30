@@ -93,13 +93,44 @@ describe('header(baseUrl): outbound calls to a provider', () => {
     expectBasicOnlyToIntake();
   });
 
-  test('passes the base URL through to the token request untouched', async () => {
+  test('strips userinfo, query and fragment before the token request, and still mints (sc-1469)', async () => {
     respondWith(() => minted('tok-1'));
 
-    await Authorization.header(PROVIDER_URL);
+    const raw = 'https://user:hunter2@api.provider.test/orders?api_key=s3cret#frag';
+    await expect(Authorization.header(raw)).resolves.toBe('Bearer tok-1');
 
     const body = JSON.parse(globalThis.fetch.mock.calls[0][1].body);
     expect(body).toEqual({ base_url: PROVIDER_URL });
+    const sent = globalThis.fetch.mock.calls.map(([url, options]) => `${url} ${JSON.stringify(options)}`).join('\n');
+    for (const secret of ['hunter2', 'api_key', 's3cret', 'frag']) {
+      expect(sent).not.toContain(secret);
+    }
+  });
+
+  test.each([
+    ['an empty query', `${PROVIDER_URL}?`],
+    ['an empty fragment', `${PROVIDER_URL}#`],
+  ])('strips %s too: intake refuses even an empty one', async (_label, raw) => {
+    respondWith(() => minted('tok-1'));
+
+    await Authorization.header(raw);
+
+    expect(JSON.parse(globalThis.fetch.mock.calls[0][1].body)).toEqual({ base_url: PROVIDER_URL });
+  });
+
+  test.each([
+    ['a relative path', '/orders'],
+    ['no host', 'mailto:ops@provider.test'],
+    ['unparseable text', 'not a url ?token=s3cret'],
+  ])('refuses %s with a TypeError and makes no request (sc-1469)', async (_label, arg) => {
+    respondWith(() => minted('tok-1'));
+
+    const err = await Authorization.header(arg).catch(e => e);
+
+    expect(err).toBeInstanceOf(TypeError);
+    expect(err.message).toMatch(/absolute URL with a scheme and host/);
+    expect(err.message).not.toContain('s3cret');
+    expect(requests).toHaveLength(0);
   });
 
   test('reuses a cached token without another mint', async () => {
@@ -170,7 +201,7 @@ describe('header(baseUrl): outbound calls to a provider', () => {
       const err = await Authorization.header(PROVIDER_URL).catch(e => e);
 
       expect(err).toBeInstanceOf(TokenUnavailableError);
-      expect(err.outcome).toBeNull();
+      expect(err.outcome).toBe(TokenOutcome.TRANSPORT_ERROR);
       expect(err.status).toBeNull();
       expect(err.cause).toBe(boom);
       expect(err.message).toBe(
@@ -266,7 +297,31 @@ describe('header(baseUrl): outbound calls to a provider', () => {
     expect(requests).toHaveLength(0);
   });
 
-  test('the message never repeats userinfo, query or fragment from the URL', () => {
+  // The same six texts, word for word, in every EndPointBlank SDK (sc-1469).
+  test.each([
+    ['credential_rejected', { outcome: 'credential_rejected', status: 401 },
+      "intake rejected this application's client credential (HTTP 401); retrying cannot help -- re-issue the credential"],
+    ['request_rejected', { outcome: 'request_rejected', status: 422 },
+      'intake refused the token request (HTTP 422); check the URL and that a grant covers the target'],
+    ['server_error', { outcome: 'server_error', status: 503 },
+      'intake failed to issue a token (HTTP 503); this may be transient'],
+    ['server_error with no status', { outcome: 'server_error', status: null },
+      'intake failed to issue a token; this may be transient'],
+    ['transport_error', { outcome: 'transport_error' },
+      'intake could not be reached (timeout, connection refused or retries exhausted); this may be transient'],
+    ['a mint that threw', { outcome: 'transport_error', cause: new Error('boom') },
+      'the token request failed unexpectedly'],
+    ['no result recorded', {},
+      'the token request failed for an unknown reason'],
+  ])('words the reason exactly: %s', (_label, details, why) => {
+    const err = new TokenUnavailableError(PROVIDER_URL, details);
+
+    expect(err.message).toBe(
+      `Could not mint an EndPointBlank access token for ${PROVIDER_URL}: ${why}. ${TAIL}`,
+    );
+  });
+
+  test('neither the message nor baseUrl repeats userinfo, query or fragment from the URL', () => {
     const raw = 'https://user:hunter2@api.provider.test:8443/v1/things?api_key=s3cret#frag';
     const err = new TokenUnavailableError(raw, { outcome: 'server_error', status: 503 });
 
@@ -274,8 +329,8 @@ describe('header(baseUrl): outbound calls to a provider', () => {
     for (const secret of ['user', 'hunter2', 'api_key', 's3cret', 'frag']) {
       expect(err.message).not.toContain(secret);
     }
-    // The caller still gets the URL it passed, unaltered.
-    expect(err.baseUrl).toBe(raw);
+    // Nor does the error's own field: reporters capture it too (sc-1469).
+    expect(err.baseUrl).toBe('https://api.provider.test:8443/v1/things');
   });
 
   test('an unparseable URL is left out of the message entirely', () => {
@@ -283,7 +338,7 @@ describe('header(baseUrl): outbound calls to a provider', () => {
 
     expect(err.message).not.toContain('s3cret');
     expect(err.message).toContain('could not be parsed');
-    expect(err.baseUrl).toBe('not a url ?token=s3cret');
+    expect(err.baseUrl).toBeNull();
   });
 
   test('TokenUnavailableError is exported from the package entry point', () => {

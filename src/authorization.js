@@ -2,6 +2,7 @@
 
 const { instance: config } = require('./configuration');
 const { TokenUnavailableError } = require('./token-unavailable-error');
+const { stripUrl } = require('./strip-url');
 
 /**
  * Generates HTTP authorization headers.
@@ -24,11 +25,13 @@ const Authorization = {
   /**
    * Returns a `Bearer <token>` header value for a call to a provider.
    *
-   * @param {string} baseUrl - The URL you are about to call, with any query
-   *   string and fragment removed. A token covering it is used, or minted if
-   *   necessary.
+   * @param {string} baseUrl - The URL you are about to call. Userinfo, query
+   *   and fragment are removed before the token request (see `stripUrl`):
+   *   they are never sent to intake, logged, or kept on the error. A token
+   *   covering the rest is used, or minted if necessary.
    * @returns {Promise<string>} `"Bearer <token>"`, and nothing else.
-   * @throws {TypeError} if `baseUrl` is missing or empty.
+   * @throws {TypeError} if `baseUrl` is missing or empty, or is not an
+   *   absolute URL with a scheme and host. No request is made.
    * @throws {TokenUnavailableError} if no token could be obtained (the mint
    *   was rejected, intake failed or timed out, or it could not be reached).
    *   No Basic header is ever produced in its place.
@@ -42,6 +45,18 @@ const Authorization = {
       );
     }
 
+    // Stripped before anything else sees it, so the token request, the cache
+    // keys, the log lines and the error all carry the same safe form.
+    const url = stripUrl(baseUrl);
+    if (url === null) {
+      // The URL itself is left out: it could not be parsed, so there is no
+      // telling which part of it is a secret.
+      throw new TypeError(
+        'Authorization.header(baseUrl) requires an absolute URL with a scheme ' +
+          'and host, such as https://api.example.com/orders.',
+      );
+    }
+
     const { AccessTokens } = require('./tokens/access-tokens');
     // The reason is read off this call's own attempt, not off
     // AccessTokens.lastFailure() afterwards: that record is shared per URL,
@@ -49,13 +64,15 @@ const Authorization = {
     let token;
     let result;
     try {
-      ({ token, result } = await AccessTokens.tokenWithResult(baseUrl));
+      ({ token, result } = await AccessTokens.tokenWithResult(url));
     } catch (err) {
-      throw new TokenUnavailableError(baseUrl, { cause: err });
+      // No status was obtained, so this is a transport error; the thrown
+      // error rides along as `cause` and its text stays out of the message.
+      throw new TokenUnavailableError(url, { outcome: 'transport_error', cause: err });
     }
     if (token) return `Bearer ${token}`;
 
-    throw new TokenUnavailableError(baseUrl, {
+    throw new TokenUnavailableError(url, {
       outcome: result ? result.outcome : null,
       status: result ? result.status : null,
     });

@@ -14,16 +14,25 @@
 
   - `header(baseUrl)` now answers `Bearer <token>` or rejects with the new
     `TokenUnavailableError` (exported from the package entry point). The
-    error carries `baseUrl`, `outcome` (a `TokenOutcome` value, or `null`
-    when the mint threw -- the original error is then `cause`) and `status`,
+    error carries `baseUrl`, `outcome` (a `TokenOutcome` value) and `status`,
     and its message says why no token could be minted and that credentials
-    are never sent to providers. The message names only the URL's scheme,
-    host and path; userinfo, query and fragment stay on `baseUrl` and out of
-    the message. A mint that threw is reported as "the token
+    are never sent to providers. A mint that threw is `transport_error`,
+    with the original error as `cause`, and is reported as "the token
     request failed unexpectedly"; the thrown error's own text stays on
-    `cause` and is not copied into the message.
-  - `header()` with no, `null` or empty URL now throws a `TypeError`. There is
-    no credential-based form for outbound calls any more.
+    `cause` and is not copied into the message. Neither is intake's response
+    body.
+  - userinfo, query and fragment are removed from the URL before the token
+    request; they are never sent to intake, logged, or kept on the error.
+    `AccessTokens.token()`, `tokenWithResult()`, `exists()` and
+    `lastFailure()` strip them the same way, so the cache and failure
+    records are keyed on the stripped URL, and `err.baseUrl` holds it too
+    (scheme, host, port and path). Intake refuses a URL carrying any of
+    them, so such a URL used to fail the mint with 422; it now mints.
+  - `header()` with no, `null` or empty URL, or one that is not an absolute
+    URL with a scheme and host, now throws a `TypeError` and makes no
+    request. There is no credential-based form for outbound calls any more.
+    `AccessTokens.token()` answers `null` for such a URL, also without a
+    request.
   - The SDK's own calls to EndPointBlank intake (authenticate, authorize,
     token minting, endpoint updates, log/request/response/error writers) keep
     using Basic, now through the internal `Authorization.intakeHeader()`.

@@ -314,7 +314,8 @@ that target, and nothing else.
 provider. When no token can be obtained — intake rejected the credential (401) or the request
 (other 4xx), intake failed (5xx), or it could not be reached (timeout, connection refused) —
 `header()` rejects with `TokenUnavailableError` instead of producing a header. Calling it with no
-URL throws a `TypeError`; there is no credential-based form.
+URL, or with one that is not an absolute URL with a scheme and host, throws a `TypeError` and makes
+no request; there is no credential-based form.
 
 ```js
 const epb = require('end-point-blank-js');
@@ -322,14 +323,15 @@ const { Authorization } = require('end-point-blank-js/src/authorization');
 
 try {
   // Pass the URL you are about to call, NOT a hostname.
-  // Strip any query string or fragment first -- intake rejects both.
+  // userinfo, query and fragment are removed before the token request; they are
+  // never sent to intake, logged, or kept on the error.
   const authHeader = await Authorization.header('https://api.example.com/orders');
   // ... call the provider with { Authorization: authHeader }
 } catch (err) {
   if (!(err instanceof epb.TokenUnavailableError)) throw err;
-  // err.outcome: an epb.TokenOutcome value, or null if the mint threw (see err.cause)
+  // err.outcome: an epb.TokenOutcome value; a mint that threw is TRANSPORT_ERROR (see err.cause)
   // err.status:  intake's HTTP status, or null when none was obtained
-  // err.baseUrl: the URL the token was requested for
+  // err.baseUrl: the URL the token was requested for: scheme, host, port and path only
   if (err.outcome === epb.TokenOutcome.CREDENTIAL_REJECTED) {
     // Permanent: re-issue this application's credential.
   } else {

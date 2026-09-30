@@ -1,5 +1,7 @@
 'use strict';
 
+const { stripUrl } = require('../strip-url');
+
 const REFRESH_BUFFER_MS = 2 * 60 * 1000; // 2 minutes
 const MIN_TTL_MS = 30 * 1000; // 30 seconds
 
@@ -49,12 +51,13 @@ class AccessTokens {
    * Returns a valid access token covering *baseUrl*, fetching one if no
    * usable entry covers it.
    *
-   * @param {string} baseUrl the URL you are about to call, with any query
-   *   string and fragment removed. It is sent verbatim; intake normalizes it
-   *   and matches it against registered base URLs by longest path prefix.
+   * @param {string} baseUrl the URL you are about to call. Userinfo, query
+   *   and fragment are removed first (see `stripUrl`); the rest is sent, and
+   *   intake normalizes it and matches it against registered base URLs by
+   *   longest path prefix.
    * @returns {Promise<string|null>} the access token, or `null` if generation
    *   failed — which includes a response that carried a token but no
-   *   `base_url`.
+   *   `base_url`, and a URL that could not be parsed (no request is made).
    */
   async token(baseUrl) {
     return (await this.tokenWithResult(baseUrl)).token;
@@ -72,9 +75,16 @@ class AccessTokens {
    *
    * @param {string} baseUrl as for {@link AccessTokens#token}.
    * @returns {Promise<{token: string|null, result: {outcome: string, status: number|null}|null}>}
-   *   `result` is `null` when a cached token was used and no mint ran.
+   *   `result` is `null` when no mint ran: a cached token was used, or the
+   *   URL could not be parsed and no request was made.
    */
-  async tokenWithResult(baseUrl) {
+  async tokenWithResult(rawUrl) {
+    // Everything below -- the cache lookup, the in-flight key, the failure
+    // record, the log lines and the request body -- sees only the stripped
+    // form (sc-1469).
+    const baseUrl = stripUrl(rawUrl);
+    if (baseUrl === null) return { token: null, result: null };
+
     const entry = this._match(baseUrl);
     if (usable(entry)) {
       return { token: entry.token, result: null };
@@ -208,13 +218,13 @@ class AccessTokens {
    * Why the last attempt to mint a token for *baseUrl* failed, or `null`.
    *
    * @param {string} baseUrl the URL that was asked for -- the same argument
-   *   {@link AccessTokens#token} was called with, not the base URL intake
-   *   resolves it to. A failed mint never learns the canonical base URL,
+   *   {@link AccessTokens#token} was called with (stripped the same way), not
+   *   the base URL intake resolves it to. A failed mint never learns the canonical base URL,
    *   so there is nothing else it could be keyed on.
    * @returns {{outcome: string, status: number|null}|null}
    */
   lastFailure(baseUrl) {
-    const record = this._failures.get(baseUrl);
+    const record = this._failures.get(stripUrl(baseUrl));
     return record !== undefined ? record : null;
   }
 
@@ -225,7 +235,7 @@ class AccessTokens {
    * @returns {boolean}
    */
   exists(baseUrl) {
-    const entry = this._match(baseUrl);
+    const entry = this._match(stripUrl(baseUrl));
     return Boolean(entry && entry.expiredAt > new Date(Date.now() + MIN_TTL_MS));
   }
 
