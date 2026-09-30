@@ -1,7 +1,15 @@
 {
   "name": "end-point-blank-js",
   "version": "0.12.0",
-  "description": "JavaScript library for EndPointBlank API integration - endpoint tracking, authorization, and error reporting",
+  "description": "Node.js and Express SDK for EndPointBlank: authorize service-to-service API calls, report endpoint versions, and see which clients still call deprecated API versions.",
+  "homepage": "https://endpointblank.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EndPointBlank/end_point_blank_js.git"
+  },
+  "bugs": {
+    "url": "https://github.com/EndPointBlank/end_point_blank_js/issues"
+  },
   "main": "src/index.js",
   "exports": {
     ".": "./src/index.js",
@@ -20,7 +28,17 @@
     "endpointblank",
     "api",
     "middleware",
-    "authorization"
+    "authorization",
+    "api-versioning",
+    "api-deprecation",
+    "deprecation",
+    "sunset",
+    "api-lifecycle",
+    "machine-to-machine",
+    "m2m-auth",
+    "api-audit-log",
+    "express",
+    "nodejs"
   ],
   "author": "Robert A. Lasch <rlasch@gmail.com>",
   "license": "UNLICENSED",
