@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## "version": "0.13.0"
 
 ### Breaking changes
 
