@@ -122,14 +122,34 @@ describe('header(baseUrl): outbound calls to a provider', () => {
     ['a relative path', '/orders'],
     ['no host', 'mailto:ops@provider.test'],
     ['unparseable text', 'not a url ?token=s3cret'],
+    ['an ftp URL', 'ftp://api.provider.test:21/orders?token=s3cret'],
+    ['a ws URL', 'ws://api.provider.test/orders'],
+    ['a wss URL', 'wss://api.provider.test/orders'],
+    ['a file URL with a host', 'file://api.provider.test/orders'],
+    ['port 0', 'https://api.provider.test:0/orders'],
+    ['a port above 65535', 'https://api.provider.test:65536/orders'],
   ])('refuses %s with a TypeError and makes no request (sc-1469)', async (_label, arg) => {
     respondWith(() => minted('tok-1'));
 
     const err = await Authorization.header(arg).catch(e => e);
 
     expect(err).toBeInstanceOf(TypeError);
-    expect(err.message).toMatch(/absolute URL with a scheme and host/);
+    expect(err.message).toMatch(/absolute http or https URL with a host/);
     expect(err.message).not.toContain('s3cret');
+    expect(requests).toHaveLength(0);
+  });
+
+  test('accepts an uppercase HTTPS scheme', async () => {
+    respondWith(() => minted('tok-1'));
+
+    await expect(Authorization.header('HTTPS://api.provider.test/orders')).resolves.toBe('Bearer tok-1');
+    expect(JSON.parse(globalThis.fetch.mock.calls[0][1].body)).toEqual({ base_url: PROVIDER_URL });
+  });
+
+  test('AccessTokens.token() answers null for a non-http(s) URL without a request', async () => {
+    respondWith(() => minted('tok-1'));
+
+    await expect(AccessTokens.token('ftp://api.provider.test/orders')).resolves.toBeNull();
     expect(requests).toHaveLength(0);
   });
 

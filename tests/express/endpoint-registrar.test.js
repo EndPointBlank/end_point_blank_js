@@ -112,4 +112,23 @@ describe('registerExpressEndpoints', () => {
 
     await expect(registerExpressEndpoints(makeApp())).resolves.toBeUndefined();
   });
+
+  test('does not bring the app down when a client credential is missing (sc-1469)', async () => {
+    config.clientSecret = null;
+
+    await expect(registerExpressEndpoints(makeApp())).resolves.toBeUndefined();
+    expect(post).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringMatching(/Failed to update endpoints: ConfigurationError: .*missing clientSecret/),
+    );
+  });
+
+  test('does not bring the app down when post() throws (sc-1469)', async () => {
+    post.mockRejectedValue(new TypeError('Failed to parse URL from nope'));
+
+    await expect(registerExpressEndpoints(makeApp())).resolves.toBeUndefined();
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringMatching(/Failed to update endpoints: TypeError: Failed to parse URL/),
+    );
+  });
 });

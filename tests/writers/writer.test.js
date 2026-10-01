@@ -104,4 +104,21 @@ describe('Writer', () => {
 
     expect(post).toHaveBeenCalledTimes(1);
   });
+
+  test('logs, not rejects, when a client credential is missing in direct mode (sc-1469)', async () => {
+    config.clientSecret = null;
+
+    await expect(new Writer('applicationErrorsUrl').write({ message: 'boom' })).resolves.toBeUndefined();
+    expect(post).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledWith(
+      '[EndPointBlank] Writer failed:', expect.stringMatching(/missing clientSecret/),
+    );
+  });
+
+  test('logs, not rejects, when post() throws in direct mode (sc-1469)', async () => {
+    post.mockRejectedValue(new TypeError('Failed to parse URL from nope'));
+
+    await expect(new Writer('applicationErrorsUrl').write({ message: 'boom' })).resolves.toBeUndefined();
+    expect(console.error).toHaveBeenCalledWith('[EndPointBlank] Writer failed:', 'Failed to parse URL from nope');
+  });
 });

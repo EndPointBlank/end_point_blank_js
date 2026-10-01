@@ -31,7 +31,7 @@ const Authorization = {
    *   covering the rest is used, or minted if necessary.
    * @returns {Promise<string>} `"Bearer <token>"`, and nothing else.
    * @throws {TypeError} if `baseUrl` is missing or empty, or is not an
-   *   absolute URL with a scheme and host. No request is made.
+   *   absolute http or https URL with a host. No request is made.
    * @throws {TokenUnavailableError} if no token could be obtained (the mint
    *   was rejected, intake failed or timed out, or it could not be reached).
    *   No Basic header is ever produced in its place. Anything unexpected
@@ -53,11 +53,11 @@ const Authorization = {
     // keys, the log lines and the error all carry the same safe form.
     const url = stripUrl(baseUrl);
     if (url === null) {
-      // The URL itself is left out: it could not be parsed, so there is no
-      // telling which part of it is a secret.
+      // The URL itself is left out: it could not be parsed (or is not http
+      // or https), so there is no telling which part of it is a secret.
       throw new TypeError(
-        'Authorization.header(baseUrl) requires an absolute URL with a scheme ' +
-          'and host, such as https://api.example.com/orders.',
+        'Authorization.header(baseUrl) requires an absolute http or https URL ' +
+          'with a host, such as https://api.example.com/orders.',
       );
     }
 

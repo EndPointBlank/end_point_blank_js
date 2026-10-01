@@ -318,7 +318,7 @@ provider. When no token can be obtained — intake rejected the credential (401)
 `header()` rejects with `TokenUnavailableError` instead of producing a header. Anything else that
 throws while minting (a bug, not an unreachable intake) is reported the same way, with
 `err.unexpected === true` and the thrown error as `err.cause`. Calling it with no URL, or with one
-that is not an absolute URL with a scheme and host, throws a `TypeError` (the Ruby gem raises
+that is not an absolute http or https URL with a host, throws a `TypeError` (the Ruby gem raises
 `ArgumentError` for the same thing) and makes no request; there is no credential-based form. A
 missing `clientId` or `clientSecret` throws `ConfigurationError` and makes no request: it is not
 reported as a rejected credential.

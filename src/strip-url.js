@@ -14,15 +14,16 @@
  *
  * Parsed with WHATWG `URL`, which lowercases the scheme and host, drops the
  * scheme's default port (`:443` for https, `:80` for http) and an empty
- * port, and refuses a non-numeric port, as the Ruby gem's `TargetUrl.strip`
- * does for the port. Two differences from Ruby's `URI`: Ruby keeps the
+ * port, and refuses a non-numeric port or one above 65535, as the Ruby
+ * gem's `TargetUrl.strip` does for the port; port 0 is refused here. Two differences from Ruby's `URI`: Ruby keeps the
  * host's case, and `URL` percent-encodes the path and resolves `.`/`..`
  * segments in it (`/a/../b` is kept as `/b`), where Ruby keeps the path as
  * written. The Python, Java and Elixir SDKs have the same helper.
  *
  * @param {*} value the URL as the caller passed it.
  * @returns {string|null} the stripped URL, or `null` when `value` is not a
- *   string, does not parse, or has no scheme or host. A `null` answer means
+ *   string, does not parse, is not an http or https URL, has no host, or
+ *   has port 0. A `null` answer means
  *   no request may be made for it.
  */
 function stripUrl(value) {
@@ -34,7 +35,14 @@ function stripUrl(value) {
   } catch {
     return null;
   }
-  if (!url.protocol || !url.hostname) return null;
+  // Only http and https: intake registers nothing else, and a mint for any
+  // other scheme (ftp, ws, file, ...) is a request it can only refuse. The
+  // Ruby gem's TargetUrl.strip refuses them the same way (rails#43).
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+  if (!url.hostname) return null;
+  // `URL` already refuses a port above 65535 or a non-numeric one, but
+  // accepts 0, which no request can be sent to.
+  if (url.port !== '' && Number(url.port) < 1) return null;
 
   return `${url.protocol}//${url.host}${pathOf(url, value)}`;
 }

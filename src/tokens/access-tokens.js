@@ -125,6 +125,11 @@ class AccessTokens {
     // this URL too -- and a failure here would delete that good entry for a
     // problem that was never its own.
     const matchedKey = this._matchKey(baseUrl);
+    // A throw here (a ConfigurationError, or a non-network error from the
+    // mint, sc-1469) propagates past everything below on purpose: nothing is
+    // recorded for lastFailure() and the matched entry is left alone, as the
+    // Ruby gem does. There is no outcome to record -- it is not something
+    // intake answered -- and Authorization.header reports the throw itself.
     const result = await GenerateAccessToken.tokenResult(baseUrl);
 
     // SUCCESS is the whole test, because SUCCESS already means a token was
@@ -221,6 +226,10 @@ class AccessTokens {
 
   /**
    * Why the last attempt to mint a token for *baseUrl* failed, or `null`.
+   *
+   * Only a failure intake reported, or a request that never completed, is
+   * recorded. A mint that threw (see `_fetch`) leaves this as it was, so it
+   * can still describe an earlier attempt.
    *
    * @param {string} baseUrl the URL that was asked for -- the same argument
    *   {@link AccessTokens#token} was called with (stripped the same way), not

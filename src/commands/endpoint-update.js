@@ -39,6 +39,14 @@ class EndpointUpdate {
     await new EndpointUpdate(endpoints).update();
   }
 
+  /**
+   * Never rejects. `registerExpressEndpoints` is called from an
+   * `app.listen` callback with nothing to catch it, so a rejection here would
+   * be unhandled and end a boot that otherwise succeeded. A missing
+   * `clientId`/`clientSecret` (`ConfigurationError`, sc-1469), an unusable
+   * intake URL, or a non-network error from `post()` is logged with its name,
+   * as the writers log theirs, and the update is skipped.
+   */
   async _write(data) {
     log.info(
       `[EndPointBlank] Sending application update: ` +
@@ -46,14 +54,18 @@ class EndpointUpdate {
         `app_version=${data.app_version}`
     );
 
-    const authHeader = Authorization.intakeHeader();
-    const response = await post(config.endpointUpdateUrl, authHeader, data);
-    if (!response) return;
-    if (response.status > 299) {
-      const body = await response.text();
-      console.error(`[EndPointBlank] Failed to update endpoints: ${response.status} - ${body}`);
-    } else {
-      log.info(`[EndPointBlank] Endpoints updated successfully: ${response.status}`);
+    try {
+      const authHeader = Authorization.intakeHeader();
+      const response = await post(config.endpointUpdateUrl, authHeader, data);
+      if (!response) return;
+      if (response.status > 299) {
+        const body = await response.text();
+        console.error(`[EndPointBlank] Failed to update endpoints: ${response.status} - ${body}`);
+      } else {
+        log.info(`[EndPointBlank] Endpoints updated successfully: ${response.status}`);
+      }
+    } catch (err) {
+      console.error(`[EndPointBlank] Failed to update endpoints: ${err.name}: ${err.message}`);
     }
   }
 

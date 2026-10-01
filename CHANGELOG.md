@@ -32,7 +32,9 @@
     URL carrying any of them, so such a URL used to fail the mint with 422;
     it now mints.
   - `header()` with no, `null` or empty URL, or one that is not an absolute
-    URL with a scheme and host, now throws a `TypeError` (the Ruby gem's
+    http or https URL with a host (`ftp://`, `ws://`, `file://` and every
+    other scheme are refused, as are port 0 and ports above 65535), now
+    throws a `TypeError` (the Ruby gem's
     `ArgumentError`) and makes no request. There is no credential-based
     form for outbound calls any more. `AccessTokens.token()` answers `null`
     for such a URL, also without a request.
@@ -55,7 +57,16 @@
   throws the `ConfigurationError` as itself rather than as a
   `TokenUnavailableError`, and every other call to intake (authenticate,
   authorize, endpoint updates, the writers) fails with it before any request;
-  the writers log it, as they do any failed write.
+  the writers log it, as they do any failed write. `EndpointUpdate` (and so
+  `registerExpressEndpoints`, called from `app.listen`) and the public
+  `Writer` factory also catch and log it, and never reject.
+
+- **The `authenticated` and `authorized` middleware pass a
+  `ConfigurationError`, or any other non-network error, to Express's error
+  handler (sc-1469)**, which answers 500 unless your handler says otherwise.
+  Before, a missing credential reached intake as `Basic null:null` and came
+  back as a 401, and any other error thrown by `fetch` was treated as
+  intake being unreachable and answered 503.
 
 - **Only a network error is a transport error, or retried (sc-1469).** The
   internal HTTP helper used to catch every error `fetch` threw, retry it

@@ -116,8 +116,8 @@ const GenerateAccessToken = {
    *   against registered base URLs by longest path prefix.
    * @returns {Promise<TokenResult>} never `null`, and never throws for a
    *   response it could not read.
-   * @throws {TypeError} if `baseUrl` is not an absolute URL with a scheme and
-   *   host. No request is made.
+   * @throws {TypeError} if `baseUrl` is not an absolute http or https URL
+   *   with a host. No request is made.
    * @throws {ConfigurationError} if `clientId` or `clientSecret` is missing,
    *   or the configured intake URL is unusable. No request is made.
    * @throws {Error} anything else thrown while minting that is not a network
@@ -129,7 +129,7 @@ const GenerateAccessToken = {
     // carrying userinfo, a query or a fragment, and must never see them.
     const url = stripUrl(baseUrl);
     if (url === null) {
-      throw new TypeError('An access token needs an absolute URL with a scheme and host.');
+      throw new TypeError('An access token needs an absolute http or https URL with a host.');
     }
     const body = { base_url: url };
     if (config.tokenTtl != null) {
