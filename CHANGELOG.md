@@ -95,8 +95,41 @@
   ran an earlier version with INFO logging on, scrub those log lines and
   rotate any client secrets that appear in them.
 
+### Added
+
+- **The intake hostname can be derived from `clientId` (sc-1463), off by
+  default.** New credentials carry their organization's slug as a prefix
+  (`acima-x7k2mq.<random>`), and that organization's intake answers at
+  `https://<slug>.in.endpointblank.com`. With the new
+  `deriveBaseUrlFromClientId: true`, the SDK calls that hostname when neither
+  `baseUrl` nor `ENDPOINTBLANK_BASE_URL` is set. It derives only when the part
+  before the first `.` has the exact shape of an organization slug and
+  something follows the dot (`clientIdSlug` in `src/configuration`, the same
+  rule as app_portal's `Credentials.client_id_slug/1`); any other `clientId`,
+  including a legacy `my.client`, calls `https://in.endpointblank.com` as
+  before. The option defaults to `false` because `*.in.endpointblank.com` has
+  no DNS or TLS in production yet; with it off, every `clientId` resolves
+  exactly as in 0.12.0. It will default to `true` in a later release, once DNS
+  and TLS are live. A value other than `true` or `false` is refused with
+  `ConfigurationError`, by `configure()` before anything from that call is
+  applied, and by the setter on direct assignment. The logs hostname
+  (`logBaseUrl`) is never derived.
+- **Every call to intake sends `x-epb-sdk: js/<version>` (sc-1463)**, with the
+  version from this library's `package.json`. intake ignores it today; it will
+  record the oldest version seen per credential for the move gate. **This
+  release is not that gate's minimum JS version:** derivation is off by
+  default here, so a host on this version with the default config keeps
+  calling `in.endpointblank.com` after its organization moves. The minimum is
+  the release that turns `deriveBaseUrlFromClientId` on by default.
+
 ### Unchanged
 
+- A 503 or a 429 from intake is never cached (sc-1463 conformance, now pinned
+  by tests): the authorization cache stores only a 201, and the token cache
+  stores only a minted token, so the next call asks intake again. The token
+  cache is still keyed on the `base_url` the mint response returns, and a 2xx
+  without one is still a failed mint (`TokenOutcome.SERVER_ERROR`). intake
+  sends `base_url` on every successful mint.
 - **`configure()` is already all-or-nothing (sc-1266, a follow-up to sc-970).**
   The sc-970 reviews found Rails and Java applying part of a `configure()`
   call — fields ahead of an invalid one in the assignment order stayed
@@ -105,7 +138,8 @@
   the 0.12.0 entry below), and `cacheTtl`, the one other currently validated
   field, is pre-checked before the assignment loop runs specifically so that
   fields ordered ahead of it in `CONFIGURE_KEYS` (e.g. `clientId`) are never
-  assigned before an invalid `cacheTtl` is caught.
+  assigned before an invalid `cacheTtl` is caught. (sc-1463's
+  `deriveBaseUrlFromClientId`, added above, is pre-checked the same way.)
 
   This release adds the cross-SDK regression test sc-1266 requires in every
   SDK regardless of whether it was already passing here — `tests/configuration.test.js`,

@@ -108,3 +108,33 @@ describe('_http post: only a network error is retried (sc-1469)', () => {
     expect(isNetworkError(err)).toBe(expected);
   });
 });
+
+// sc-1463: intake will record the oldest SDK version seen per credential,
+// which gates moving an organization to another intake.
+describe('x-epb-sdk', () => {
+  const { SDK_HEADER } = require('../../src/commands/_http');
+  const { version } = require('../../package.json');
+  let originalFetch;
+
+  beforeEach(() => {
+    originalFetch = global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  test('names this SDK and its version', () => {
+    expect(SDK_HEADER).toBe(`js/${version}`);
+  });
+
+  test('is sent on every post, alongside the authorization header', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ status: 200 });
+
+    await post('https://example.test/x', 'Bearer t', { a: 1 });
+
+    const [, options] = global.fetch.mock.calls[0];
+    expect(options.headers['x-epb-sdk']).toBe(`js/${version}`);
+    expect(options.headers.Authorization).toBe('Bearer t');
+  });
+});
