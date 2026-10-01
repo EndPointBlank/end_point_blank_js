@@ -35,6 +35,7 @@ const {
 const { UnauthorizedError } = require('./unauthorized-error');
 const { VERSION } = require('./version');
 const { TokenOutcome } = require('./commands/generate-access-token');
+const { TokenUnavailableError } = require('./token-unavailable-error');
 
 const CONFIGURE_KEYS = Object.freeze([
   'clientId', 'clientSecret', 'baseUrl', 'logBaseUrl', 'environment', 'appName',
@@ -122,6 +123,11 @@ module.exports = {
   // compare against, and making them reach into src/commands/ for it invites
   // the retyped string literal it exists to prevent.
   TokenOutcome,
+  // Thrown by Authorization.header(baseUrl) when no token can be obtained for
+  // a provider call (sc-1469). There is no Basic fallback any more, so every
+  // caller of that function has to be able to catch this without reaching
+  // into src/.
+  TokenUnavailableError,
   // Expose config singleton for direct access when needed
   config,
 };

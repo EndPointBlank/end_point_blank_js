@@ -2,6 +2,89 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **BREAKING: `Authorization.header(baseUrl)` no longer falls back to HTTP
+  Basic (sc-1469).** It used to answer `Bearer <token>` when a token could be
+  minted and silently answer `Basic base64(clientId:clientSecret)` when it
+  could not (token mint rejected, intake outage or timeout, 401), and
+  `header()` with no URL always answered Basic. Either way a client could end
+  up sending its own credential to the provider it was calling. A client must
+  never send its `clientId`/`clientSecret` to a provider, so:
+
+  - `header(baseUrl)` now answers `Bearer <token>` or rejects with the new
+    `TokenUnavailableError` (exported from the package entry point). The
+    error carries `baseUrl`, `outcome` (a `TokenOutcome` value), `status`
+    and `unexpected`, and its message says why no token could be minted and
+    that credentials are never sent to providers. A mint that threw anything
+    other than `ConfigurationError` is `transport_error` with `unexpected`
+    set to `true` and the original error as `cause`, and is reported as "the
+    token request failed unexpectedly"; the thrown error's own text stays on
+    `cause` and is not copied into the message. Neither is intake's response
+    body.
+  - userinfo, query and fragment are removed from the URL before the token
+    request; they are never sent to intake, logged, or kept on the error.
+    `AccessTokens.token()`, `tokenWithResult()`, `exists()` and
+    `lastFailure()` strip them the same way, so the cache and failure
+    records are keyed on the stripped URL, and `err.baseUrl` holds it too
+    (scheme, host, port and path; the scheme and host lowercased, and the
+    port dropped when it is the scheme's default or empty). Intake refuses a
+    URL carrying any of them, so such a URL used to fail the mint with 422;
+    it now mints.
+  - `header()` with no, `null` or empty URL, or one that is not an absolute
+    http or https URL with a host (`ftp://`, `ws://`, `file://` and every
+    other scheme are refused, as are port 0 and ports above 65535), now
+    throws a `TypeError` (the Ruby gem's
+    `ArgumentError`) and makes no request. There is no credential-based
+    form for outbound calls any more. `AccessTokens.token()` answers `null`
+    for such a URL, also without a request.
+  - The SDK's own calls to EndPointBlank intake (authenticate, authorize,
+    token minting, endpoint updates, log/request/response/error writers) keep
+    using Basic, now through the internal `Authorization.intakeHeader()`.
+    Do not use it for calls to a provider.
+
+  **What a caller must change:** wrap `await Authorization.header(url)` in a
+  `try`/`catch` for `TokenUnavailableError` and fail (or retry later) instead
+  of calling the provider; remove any `Authorization.header()` call made with
+  no URL. Code that relied on the Basic fallback to keep a provider call
+  working through an intake outage will now see the error instead.
+
+- **A missing `clientId` or `clientSecret` throws `ConfigurationError`
+  (sc-1469)** when the SDK builds its own Basic header for intake, instead of
+  sending `Basic null:null` (or `:`). Intake answered that with 401, which
+  was reported as a rejected credential with "re-issue the credential" as the
+  advice. This covers token minting too, so `Authorization.header(url)`
+  throws the `ConfigurationError` as itself rather than as a
+  `TokenUnavailableError`, and every other call to intake (authenticate,
+  authorize, endpoint updates, the writers) fails with it before any request;
+  the writers log it, as they do any failed write. `EndpointUpdate` (and so
+  `registerExpressEndpoints`, called from `app.listen`) and the public
+  `Writer` factory also catch and log it, and never reject.
+
+- **The `authenticated` and `authorized` middleware pass a
+  `ConfigurationError`, or any other non-network error, to Express's error
+  handler (sc-1469)**, which answers 500 unless your handler says otherwise.
+  Before, a missing credential reached intake as `Basic null:null` and came
+  back as a 401, and any other error thrown by `fetch` was treated as
+  intake being unreachable and answered 503.
+
+- **Only a network error is a transport error, or retried (sc-1469).** The
+  internal HTTP helper used to catch every error `fetch` threw, retry it
+  twice and answer `null`, so a URL `fetch` could not parse, a body that
+  would not serialize, or a bug read as "intake could not be reached". It now
+  retries and answers `null` only for a request that never completed (our
+  timeout, or `fetch failed` / a socket error code); anything else is thrown
+  on the first attempt. `GenerateAccessToken.tokenResult()`/`token()` and
+  `AccessTokens.token()`/`tokenWithResult()`, which used to answer a
+  `transport_error` result or `null` for it, now throw it; only
+  `Authorization.header(url)` wraps it, as above.
+
+- **`BearerGenerate` is deprecated (sc-1469).** Its header carries this
+  service's own `clientId:clientSecret` and is only valid for its own intake;
+  never send it to a provider. Use `Authorization.header(url)` for outbound
+  calls. `generate()`/`authHeader()` emit a one-time `DeprecationWarning` on
+  first use.
+
 ### Security
 
 - **The authenticate command no longer logs the caller's `Authorization`

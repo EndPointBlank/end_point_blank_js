@@ -126,23 +126,56 @@ describe('AccessTokens', () => {
       expect(post.mock.calls[1][2]).toEqual({ base_url: 'https://example.com/ordersXX' });
     });
 
-    test.each([
-      ['a different case', 'https://example.com/Orders'],
-      ['a query string', 'https://example.com/orders?page=2'],
-    ])('a non-canonical URL misses rather than guessing: %s', async (_label, requested) => {
+    test('a non-canonical URL misses rather than guessing: a different case', async () => {
       // The SDK does not normalize -- intake owns that rule. A URL that does
       // not match character-for-character costs one extra request, which is
-      // cheaper than presenting a token issued for somewhere else. (A query
-      // string should have been stripped before it got here; missing is the
-      // right answer when it was not.)
+      // cheaper than presenting a token issued for somewhere else.
       post
         .mockResolvedValueOnce(tokenResponse(tokenPayload('tok-1', { baseUrl: 'https://example.com/orders' })))
         .mockResolvedValueOnce(tokenResponse(tokenPayload('tok-2', { baseUrl: 'https://example.com/orders' })));
 
       await AccessTokens.token('https://example.com/orders');
 
-      await expect(AccessTokens.token(requested)).resolves.toBe('tok-2');
+      await expect(AccessTokens.token('https://example.com/Orders')).resolves.toBe('tok-2');
       expect(post).toHaveBeenCalledTimes(2);
+    });
+
+    test('userinfo, query and fragment are stripped, so the URL matches on its path (sc-1469)', async () => {
+      post.mockResolvedValue(tokenResponse(tokenPayload('tok-1', { baseUrl: 'https://example.com/orders' })));
+
+      await AccessTokens.token('https://example.com/orders');
+
+      const raw = 'https://user:hunter2@example.com/orders?page=2#top';
+      await expect(AccessTokens.token(raw)).resolves.toBe('tok-1');
+      expect(AccessTokens.exists(raw)).toBe(true);
+      expect(post).toHaveBeenCalledTimes(1);
+    });
+
+    test('a failure is recorded and logged under the stripped URL (sc-1469)', async () => {
+      post.mockResolvedValue(errorResponse(503, {}));
+      const raw = 'https://user:hunter2@example.com/orders?api_key=s3cret#frag';
+
+      await AccessTokens.token(raw);
+
+      expect(post.mock.calls[0][2]).toEqual({ base_url: 'https://example.com/orders' });
+      expect(AccessTokens.lastFailure('https://example.com/orders')).toEqual({
+        outcome: TokenOutcome.SERVER_ERROR,
+        status: 503,
+      });
+      expect(AccessTokens.lastFailure(raw)).toEqual(AccessTokens.lastFailure('https://example.com/orders'));
+      const logged = console.error.mock.calls.map(args => args.join(' ')).join('\n');
+      expect(logged).toContain('https://example.com/orders');
+      for (const secret of ['user', 'hunter2', 'api_key', 's3cret', 'frag']) {
+        expect(logged).not.toContain(secret);
+      }
+    });
+
+    test('an unparseable URL makes no request (sc-1469)', async () => {
+      post.mockResolvedValue(tokenResponse(tokenPayload('tok-1')));
+
+      await expect(AccessTokens.tokenWithResult('not a url ?token=s3cret'))
+        .resolves.toEqual({ token: null, result: null });
+      expect(post).not.toHaveBeenCalled();
     });
 
     test('a trailing slash still matches', async () => {

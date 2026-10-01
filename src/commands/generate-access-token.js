@@ -4,6 +4,7 @@ const { instance: config } = require('../configuration');
 const { Authorization } = require('../authorization');
 const { post } = require('./_http');
 const log = require('../log');
+const { stripUrl } = require('../strip-url');
 
 /**
  * What a token request came back as.
@@ -110,18 +111,32 @@ const GenerateAccessToken = {
    * older payload-or-`null` form and stays exactly as it was; this is the one
    * to call when the caller needs to know whether trying again could help.
    *
-   * @param {string} baseUrl sent verbatim. intake normalizes it and matches
-   *   it against registered base URLs by longest path prefix.
+   * @param {string} baseUrl userinfo, query and fragment are removed (see
+   *   `stripUrl`) and the rest is sent. intake normalizes it and matches it
+   *   against registered base URLs by longest path prefix.
    * @returns {Promise<TokenResult>} never `null`, and never throws for a
    *   response it could not read.
+   * @throws {TypeError} if `baseUrl` is not an absolute http or https URL
+   *   with a host. No request is made.
+   * @throws {ConfigurationError} if `clientId` or `clientSecret` is missing,
+   *   or the configured intake URL is unusable. No request is made.
+   * @throws {Error} anything else thrown while minting that is not a network
+   *   error (see `_http.post`), as itself. Only a request that never
+   *   completed is `TRANSPORT_ERROR` (sc-1469).
    */
   async tokenResult(baseUrl) {
-    const body = { base_url: baseUrl };
+    // Defensive: AccessTokens has already stripped it. Intake refuses a URL
+    // carrying userinfo, a query or a fragment, and must never see them.
+    const url = stripUrl(baseUrl);
+    if (url === null) {
+      throw new TypeError('An access token needs an absolute http or https URL with a host.');
+    }
+    const body = { base_url: url };
     if (config.tokenTtl != null) {
       body.token_ttl = config.tokenTtl;
     }
 
-    const authHeader = await Authorization.header();
+    const authHeader = Authorization.intakeHeader();
     const response = await post(config.accessTokenUrl, authHeader, body);
 
     // TRANSPORT_ERROR means one thing and only one thing: no usable HTTP
@@ -188,10 +203,11 @@ const GenerateAccessToken = {
    * or needs to tell a rejected credential from a failing service, wants
    * `tokenResult` instead: it carries both the outcome and the payload.
    *
-   * @param {string} baseUrl sent verbatim. intake normalizes it and matches
-   *   it against registered base URLs by longest path prefix.
+   * @param {string} baseUrl as for {@link GenerateAccessToken.tokenResult}.
    * @returns {Promise<object|null>} Object with `token`, `expired_at` and
    *   `base_url`, or `null` when no token was minted.
+   * @throws {Error} whatever {@link GenerateAccessToken.tokenResult} throws,
+   *   as itself.
    */
   async token(baseUrl) {
     const result = await GenerateAccessToken.tokenResult(baseUrl);

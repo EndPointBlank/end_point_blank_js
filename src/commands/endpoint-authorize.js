@@ -68,7 +68,7 @@ const EndpointAuthorize = {
     // that bought nothing. With no Bearer there is no stale token, so the
     // 401 retry that used to live here is gone: a 401 now means the
     // credential is wrong, which is worth surfacing rather than retrying.
-    const authHeader = await Authorization.header();
+    const authHeader = Authorization.intakeHeader();
     const response = await post(config.authorizeUrl, authHeader, body);
 
     if (!response) return null;

@@ -46,12 +46,21 @@ class Writer {
    * own payloads inline and so each mask their own; this class shapes nothing
    * and masks nothing. See sc-355.
    *
+   * Never rejects, like `RequestWriter`, `ResponseWriter` and
+   * `ExceptionWriter`: a failure to report -- a missing `clientId` or
+   * `clientSecret` (`ConfigurationError`, sc-1469), a non-network error from
+   * `post()` -- is logged, not thrown at the code being reported on.
+   *
    * @param {object} opts - See {@link PayloadBuilder.build}.
    * @returns {Promise<void>}
    */
   async write(opts) {
-    const payload = PayloadBuilder.build(opts);
-    await this._getWriter().write([payload]);
+    try {
+      const payload = PayloadBuilder.build(opts);
+      await this._getWriter().write([payload]);
+    } catch (err) {
+      console.error('[EndPointBlank] Writer failed:', err.message);
+    }
   }
 
   _getWriter() {
