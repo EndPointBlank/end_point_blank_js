@@ -1,6 +1,8 @@
 # EndPointBlank (JavaScript)
 
-Node.js client for EndPointBlank: endpoint tracking, request/response/error/log reporting, route
+Node.js and Express SDK for [EndPointBlank](https://endpointblank.com): authorize
+service-to-service API calls, report endpoint versions, and see which clients still call deprecated
+API versions. It covers endpoint tracking, request/response/error/log reporting, route
 authorization &amp; authentication, and client-side data masking — with an optional Express
 integration.
 
