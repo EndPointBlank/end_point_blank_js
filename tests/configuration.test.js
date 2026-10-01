@@ -1,7 +1,9 @@
 'use strict';
 
 const epb = require('../src/index');
-const { instance: config, LogMode, ConfigurationError } = require('../src/configuration');
+const {
+  instance: config, LogMode, ConfigurationError, clientIdSlug,
+} = require('../src/configuration');
 
 beforeEach(() => config._reset());
 afterEach(() => config._reset());
@@ -613,5 +615,176 @@ describe('ENDPOINTBLANK_* environment variable configuration', () => {
     test('defaults to null when neither set', () => {
       expect(config.environment).toBeNull();
     });
+  });
+});
+
+// sc-1463. *.in.endpointblank.com has no DNS or TLS in production yet, so
+// derivation is off by default, and off must mean exactly today's answer.
+describe('sc-1463: baseUrl derived from clientId', () => {
+  const PREFIXED = 'acima-x7k2mq.ijXI+MVwmrC5xH/9ZuGiQlAbAyobTqMa';
+  const DEFAULT_BASE_URL = 'https://in.endpointblank.com';
+  const DERIVED = 'https://acima-x7k2mq.in.endpointblank.com';
+  const ENV_KEYS = ['ENDPOINTBLANK_CLIENT_ID', 'ENDPOINTBLANK_BASE_URL', 'ENDPOINTBLANK_LOG_BASE_URL'];
+  const savedEnv = {};
+
+  beforeEach(() => {
+    for (const key of ENV_KEYS) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+  });
+
+  afterEach(() => {
+    for (const key of ENV_KEYS) {
+      if (savedEnv[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = savedEnv[key];
+      }
+    }
+  });
+
+  test('is off by default', () => {
+    expect(config.deriveBaseUrlFromClientId).toBe(false);
+  });
+
+  test('with derivation off, every clientId resolves to today\'s default', () => {
+    for (const clientId of [PREFIXED, 'plain-client-id', 'my.client', null]) {
+      config._reset();
+      if (clientId) epb.configure({ clientId });
+
+      expect(config.baseUrl).toBe(DEFAULT_BASE_URL);
+      expect(config.authorizeUrl).toBe(`${DEFAULT_BASE_URL}/api/authorize`);
+      expect(config.accessTokenUrl).toBe(`${DEFAULT_BASE_URL}/api/access_token`);
+    }
+  });
+
+  test('with derivation off, a prefixed ENDPOINTBLANK_CLIENT_ID changes nothing', () => {
+    process.env.ENDPOINTBLANK_CLIENT_ID = PREFIXED;
+    expect(config.baseUrl).toBe(DEFAULT_BASE_URL);
+  });
+
+  test('with derivation on, a slug-prefixed clientId calls its organization\'s intake', () => {
+    epb.configure({ deriveBaseUrlFromClientId: true, clientId: PREFIXED });
+
+    expect(config.baseUrl).toBe(DERIVED);
+    expect(config.authorizeUrl).toBe(`${DERIVED}/api/authorize`);
+    expect(config.accessTokenUrl).toBe(`${DERIVED}/api/access_token`);
+    expect(config.endpointUpdateUrl).toBe(`${DERIVED}/api/application_updates`);
+  });
+
+  test('with derivation on, the clientId may come from ENDPOINTBLANK_CLIENT_ID', () => {
+    process.env.ENDPOINTBLANK_CLIENT_ID = PREFIXED;
+    epb.configure({ deriveBaseUrlFromClientId: true });
+
+    expect(config.baseUrl).toBe(DERIVED);
+  });
+
+  test('with derivation on, an explicit baseUrl still wins', () => {
+    epb.configure({
+      deriveBaseUrlFromClientId: true,
+      clientId: PREFIXED,
+      baseUrl: 'https://explicit.example',
+    });
+
+    expect(config.baseUrl).toBe('https://explicit.example');
+  });
+
+  test('with derivation on, ENDPOINTBLANK_BASE_URL still wins', () => {
+    process.env.ENDPOINTBLANK_BASE_URL = 'https://env.example';
+    epb.configure({ deriveBaseUrlFromClientId: true, clientId: PREFIXED });
+
+    expect(config.baseUrl).toBe('https://env.example');
+  });
+
+  test('with derivation on, a clientId without a slug prefix calls the default intake', () => {
+    // "my.client" has a dot but no slug before it: the portal has always
+    // accepted a typed client_id, so a legacy id like this can exist.
+    for (const clientId of [
+      'plain-client-id',
+      'ijXI+MVwmrC5xH/9ZuGiQlAbAyobTqMa',
+      'my.client',
+      'acima-x7k2mq.',
+      '.acima-x7k2mq',
+      'Acima-x7k2mq.abc',
+      'acima-x7k2m.abc',
+      'acima-x7k2mqq.abc',
+      '-acima-x7k2mq.abc',
+      'acima--x7k2mq.abc',
+    ]) {
+      config._reset();
+      epb.configure({ deriveBaseUrlFromClientId: true, clientId });
+
+      expect([clientId, config.baseUrl]).toEqual([clientId, DEFAULT_BASE_URL]);
+    }
+  });
+
+  test('with derivation on and no clientId, calls the default intake', () => {
+    epb.configure({ deriveBaseUrlFromClientId: true });
+    expect(config.baseUrl).toBe(DEFAULT_BASE_URL);
+  });
+
+  test('never derives the logs hostname', () => {
+    epb.configure({ deriveBaseUrlFromClientId: true, clientId: PREFIXED });
+
+    expect(config.logBaseUrl).toBe('https://log.endpointblank.com');
+    expect(config.logUrl).toBe('https://log.endpointblank.com/api/application_logs');
+  });
+
+  test('configure() refuses a value that is not a boolean, applying nothing', () => {
+    for (const invalid of ['true', 1, null, 'yes']) {
+      expect(() => epb.configure({ clientId: PREFIXED, deriveBaseUrlFromClientId: invalid }))
+        .toThrow(/deriveBaseUrlFromClientId/);
+
+      expect(config.clientId).toBeNull();
+      expect(config.deriveBaseUrlFromClientId).toBe(false);
+    }
+  });
+
+  test('direct assignment of a value that is not a boolean throws and keeps the old value', () => {
+    config.deriveBaseUrlFromClientId = true;
+
+    for (const invalid of ['false', 0, null, undefined]) {
+      expect(() => { config.deriveBaseUrlFromClientId = invalid; }).toThrow(ConfigurationError);
+      expect(config.deriveBaseUrlFromClientId).toBe(true);
+    }
+  });
+});
+
+describe('sc-1463: clientIdSlug', () => {
+  test('answers the slug of a prefixed clientId', () => {
+    expect(clientIdSlug('acima-x7k2mq.ijXI+MVwmrC5xH/9ZuGiQlAbAyobTqMa')).toBe('acima-x7k2mq');
+
+    // The longest label app_portal makes: 20 characters, then the random part.
+    expect(clientIdSlug('abcdefghij0123456789-x7k2mq.r')).toBe('abcdefghij0123456789-x7k2mq');
+
+    // The fallback label for an organization with no usable name.
+    expect(clientIdSlug('org-x7k2mq.r')).toBe('org-x7k2mq');
+  });
+
+  test('splits on the first dot only', () => {
+    expect(clientIdSlug('acima-x7k2mq.a.b')).toBe('acima-x7k2mq');
+  });
+
+  test('answers null for anything else', () => {
+    for (const value of [
+      null,
+      undefined,
+      '',
+      'no-dot',
+      'my.client',
+      'acima-x7k2mq.',
+      'abcdefghij01234567890-x7k2mq.r',
+      'acima-x7k2mq-.r',
+      'acima_x7k2mq.r',
+      // Nothing outside [a-z0-9-] may reach the derived hostname.
+      'acima-x7k2mq\n.r',
+      'evil.com@acima-x7k2mq.r',
+      'a:1-x7k2mq.r',
+      'ACIMA-X7K2MQ.r',
+      123,
+    ]) {
+      expect([value, clientIdSlug(value)]).toEqual([value, null]);
+    }
   });
 });

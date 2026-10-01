@@ -560,6 +560,61 @@ describe('EndpointAuthorize.authorize', () => {
     });
   });
 
+  // sc-1463 conformance: intake answers 503 and 429 about the moment, not the
+  // grant. Caching either would keep refusing for the whole TTL after intake
+  // recovered.
+  describe('a 503 or a 429 from intake', () => {
+    test.each([503, 429])('%i is not cached, and the next request authorizes once intake does', async (status) => {
+      api.authorizeQueue.push(jsonResponse(status, { error: 'busy' }));
+
+      const first = await authorize(req(), '/students', '1');
+      expect(first.response.status).toBe(status);
+
+      const second = await authorize(req(), '/students', '1');
+      expect(second.response.status).toBe(201);
+
+      expect(api.calls.authorize).toHaveLength(2);
+    });
+  });
+
+  // sc-1463: with derivation on, a prefixed clientId sends every intake call
+  // to its organization's hostname; off, to the configured or default one.
+  describe('the intake it calls', () => {
+    const PREFIXED = 'acima-x7k2mq.ijXI+MVwmrC5xH/9ZuGiQlAbAyobTqMa';
+    let savedBaseUrl;
+
+    beforeEach(() => {
+      savedBaseUrl = process.env.ENDPOINTBLANK_BASE_URL;
+      delete process.env.ENDPOINTBLANK_BASE_URL;
+      config._reset();
+      config.appName = 'billing';
+      config.clientId = PREFIXED;
+      config.clientSecret = 'client-secret';
+    });
+
+    afterEach(() => {
+      if (savedBaseUrl === undefined) {
+        delete process.env.ENDPOINTBLANK_BASE_URL;
+      } else {
+        process.env.ENDPOINTBLANK_BASE_URL = savedBaseUrl;
+      }
+    });
+
+    test('is the organization\'s hostname when derivation is on and no baseUrl is set', async () => {
+      config.deriveBaseUrlFromClientId = true;
+
+      await authorize(req());
+
+      expect(post.mock.calls[0][0]).toBe('https://acima-x7k2mq.in.endpointblank.com/api/authorize');
+    });
+
+    test('is the default intake when derivation is off, whatever the clientId', async () => {
+      await authorize(req());
+
+      expect(post.mock.calls[0][0]).toBe('https://in.endpointblank.com/api/authorize');
+    });
+  });
+
   describe('the hostname it reports', () => {
     test('lowercases it and strips the port', async () => {
       await authorize(req({ headers: { host: 'API.Example.TEST:3000' } }));

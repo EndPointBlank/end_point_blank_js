@@ -1,5 +1,18 @@
 'use strict';
 
+const { VERSION } = require('../version');
+
+/**
+ * The `x-epb-sdk` value sent on every call to intake: `js/<version>`, the
+ * version of this library from its `package.json` (sc-1463). intake ignores
+ * it today; it is there so intake can record the oldest version seen per
+ * credential for the move gate. That gate's minimum JS version is the release
+ * that turns `deriveBaseUrlFromClientId` on by default, not the one that
+ * added this header: with the option at its default, this version keeps
+ * calling `in.endpointblank.com` after its organization moves.
+ */
+const SDK_HEADER = `js/${VERSION}`;
+
 // Per-attempt total timeout budget for a single fetch() call. This is a
 // fire-and-forget telemetry send, so 15s was needlessly generous; 8s is a
 // more sensible ceiling (roughly a ~3s connect + ~5s read budget).
@@ -39,6 +52,7 @@ async function post(url, authHeader, body) {
         headers: {
           Authorization: authHeader,
           'Content-Type': 'application/json',
+          'x-epb-sdk': SDK_HEADER,
         },
         body: JSON.stringify(body),
         signal: controller.signal,
@@ -56,4 +70,4 @@ async function post(url, authHeader, body) {
   return null;
 }
 
-module.exports = { post };
+module.exports = { post, SDK_HEADER };

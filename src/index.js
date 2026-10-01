@@ -30,7 +30,7 @@
  */
 
 const {
-  instance: config, LogMode, ConfigurationError, validateCacheTtl,
+  instance: config, LogMode, ConfigurationError, validateCacheTtl, validateDeriveBaseUrl,
 } = require('./configuration');
 const { UnauthorizedError } = require('./unauthorized-error');
 const { VERSION } = require('./version');
@@ -40,6 +40,7 @@ const CONFIGURE_KEYS = Object.freeze([
   'clientId', 'clientSecret', 'baseUrl', 'logBaseUrl', 'environment', 'appName',
   'workerCount', 'logMode', 'versionFinder', 'applicationVersion',
   'tokenTtl', 'cacheTtl', 'trustProxyHeaders', 'maskingRules', 'maskHook',
+  'deriveBaseUrlFromClientId',
 ]);
 
 /**
@@ -56,9 +57,11 @@ const CONFIGURE_KEYS = Object.freeze([
  * `cacheTtl` is present but is not a non-negative integer (sc-970): an
  * explicit `null`, a negative number, a float, a string. Omit `cacheTtl` (or
  * pass `undefined`) for the default of 300; pass `0` to disable the cache.
+ * The same holds for a `deriveBaseUrlFromClientId` that is not a boolean
+ * (sc-1463).
  *
  * @throws {ConfigurationError} if any key in `opts` is unknown, or `cacheTtl`
- *   is invalid
+ *   or `deriveBaseUrlFromClientId` is invalid
  *
  * @param {object} opts
  * @param {string} [opts.clientId]
@@ -74,6 +77,10 @@ const CONFIGURE_KEYS = Object.freeze([
  * @param {number} [opts.tokenTtl] - Seconds
  * @param {number} [opts.cacheTtl] - Seconds, a non-negative integer
  *   (default: 300; `0` disables the cache)
+ * @param {boolean} [opts.deriveBaseUrlFromClientId] - When no `baseUrl` or
+ *   `ENDPOINTBLANK_BASE_URL` is set, call `https://<slug>.in.endpointblank.com`
+ *   for a slug-prefixed `clientId` (default: `false`; see the README's "Intake
+ *   hostname from `clientId`")
  */
 function configure(opts = {}) {
   // Checked in full before anything is assigned, so a bad call changes nothing.
@@ -87,6 +94,9 @@ function configure(opts = {}) {
   // The `cacheTtl` setter validates too, but by the time the loop below
   // reaches it, the keys before it would already have been assigned.
   if (opts.cacheTtl !== undefined) validateCacheTtl(opts.cacheTtl);
+  if (opts.deriveBaseUrlFromClientId !== undefined) {
+    validateDeriveBaseUrl(opts.deriveBaseUrlFromClientId);
+  }
   for (const key of CONFIGURE_KEYS) {
     if (opts[key] !== undefined) {
       config[key] = opts[key];
@@ -99,8 +109,8 @@ module.exports = {
   VERSION,
   LogMode,
   UnauthorizedError,
-  // Thrown by configure() for an unknown key or an invalid cacheTtl, by the
-  // cacheTtl setter on direct assignment, and from a baseUrl/logBaseUrl
+  // Thrown by configure() for an unknown key or an invalid cacheTtl or
+  // deriveBaseUrlFromClientId, by those two setters on direct assignment, and from a baseUrl/logBaseUrl
   // getter on first read if the configured value can never produce a working
   // URL. Re-exported here, next to UnauthorizedError, so a caller catching
   // one of these breaking-change throws does not have to reach into

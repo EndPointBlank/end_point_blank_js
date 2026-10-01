@@ -405,6 +405,25 @@ describe('AccessTokens', () => {
     });
   });
 
+  // sc-1463 conformance: a 503 or a 429 is an answer about this moment, not
+  // about the credential, so nothing may hold on to it -- the very next call
+  // asks intake again, and succeeds once intake does.
+  describe('a 503 or a 429 from intake', () => {
+    test.each([503, 429])('%i is not cached: the next call mints again', async (status) => {
+      post.mockResolvedValue(errorResponse(status, { error: 'busy' }));
+
+      await expect(AccessTokens.token(BASE)).resolves.toBeNull();
+      await expect(AccessTokens.token(BASE)).resolves.toBeNull();
+
+      expect(post).toHaveBeenCalledTimes(2);
+      expect(AccessTokens.exists(BASE)).toBe(false);
+
+      post.mockResolvedValue(tokenResponse(tokenPayload('tok-1')));
+      await expect(AccessTokens.token(BASE)).resolves.toBe('tok-1');
+      expect(AccessTokens.lastFailure(BASE)).toBeNull();
+    });
+  });
+
   describe('expiry given by the service', () => {
     test('an unparseable expiry does not discard an otherwise good token', async () => {
       // Better to hold the token for a default hour than to refetch on every

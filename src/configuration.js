@@ -12,8 +12,9 @@ const LogMode = Object.freeze({
  * Thrown when the library is configured in a way that can never work.
  *
  * `configure()` throws it for an unknown key, and for a `cacheTtl` that is
- * not a non-negative integer (see `validateCacheTtl`), before applying
- * anything from that call.
+ * not a non-negative integer (see `validateCacheTtl`) or a
+ * `deriveBaseUrlFromClientId` that is not a boolean (see
+ * `validateDeriveBaseUrl`), before applying anything from that call.
  *
  * It is also thrown when a configured `baseUrl` or `logBaseUrl` can never
  * produce a working URL. That check runs the first time the value is read,
@@ -66,6 +67,57 @@ function normalizeBaseUrl(url, propertyName) {
 }
 
 const DEFAULT_CACHE_TTL = 300; // seconds
+
+const DEFAULT_BASE_URL = 'https://in.endpointblank.com';
+const DERIVED_BASE_URL_SUFFIX = '.in.endpointblank.com';
+
+// app_portal's `Organizations.Slug.valid?/1`: a domain label of up to 20
+// `[a-z0-9-]` characters that starts and ends alphanumeric, then `-` and 6
+// random characters. Copied, not loosened. No `m` flag, so `$` is the end of
+// the input and a trailing newline does not match.
+const CLIENT_ID_SLUG = /^[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])?-[a-z0-9]{6}$/;
+
+/**
+ * The organization slug a `clientId` names, or `null` for one without it
+ * (issued before sc-1463).
+ *
+ * The same rule as app_portal's `Credentials.client_id_slug/1`, and the rule
+ * all five SDKs share: the part before the first `.` must have the exact
+ * shape of an organization slug, and something must follow the dot.
+ * "Contains a `.`" is not enough, because app_portal has always accepted a
+ * typed `client_id`, so a legacy `my.client` can exist and must keep calling
+ * the default intake.
+ *
+ * @param {*} clientId
+ * @returns {string|null}
+ */
+function clientIdSlug(clientId) {
+  if (typeof clientId !== 'string') return null;
+
+  const dot = clientId.indexOf('.');
+  if (dot === -1 || dot === clientId.length - 1) return null;
+
+  const slug = clientId.slice(0, dot);
+  return CLIENT_ID_SLUG.test(slug) ? slug : null;
+}
+
+/**
+ * Only a boolean: a string `'true'` from an env var must not quietly leave
+ * derivation off, and nothing else has a sensible reading. Called by the
+ * setter, and by `configure()` before it assigns anything.
+ *
+ * @param {*} value
+ * @returns {boolean} *value*, unchanged, when it is valid
+ * @throws {ConfigurationError} when it is not
+ */
+function validateDeriveBaseUrl(value) {
+  if (typeof value !== 'boolean') {
+    throw new ConfigurationError(
+      `deriveBaseUrlFromClientId must be true or false, but got ${describeValue(value)}.`
+    );
+  }
+  return value;
+}
 
 /** Renders a rejected value for an error message without risking a throw of its own. */
 function describeValue(value) {
@@ -157,6 +209,7 @@ class Configuration {
     this.trustProxyHeaders = true;
     this.maskingRules = [];
     this.maskHook = null;
+    this._deriveBaseUrlFromClientId = false;
   }
 
   /**
@@ -185,19 +238,50 @@ class Configuration {
 
   /**
    * Returns the configured base URL, falling back to the
-   * ENDPOINTBLANK_BASE_URL environment variable, then a built-in default.
+   * ENDPOINTBLANK_BASE_URL environment variable, then -- only while
+   * {@link Configuration#deriveBaseUrlFromClientId} is on -- the intake a
+   * slug-prefixed `clientId` names, then a built-in default.
    *
    * The resolved value is normalized: trailing slashes are stripped, and a
    * value that already ends in `/api` raises {@link ConfigurationError} (see
    * `normalizeBaseUrl` above).
    */
   get baseUrl() {
-    const raw = this._baseUrl || process.env.ENDPOINTBLANK_BASE_URL || 'https://in.endpointblank.com';
+    const raw = this._baseUrl || process.env.ENDPOINTBLANK_BASE_URL ||
+      this._derivedBaseUrl() || DEFAULT_BASE_URL;
     return normalizeBaseUrl(raw, 'baseUrl');
   }
 
   set baseUrl(value) {
     this._baseUrl = value;
+  }
+
+  // sc-1463: a new `clientId` is `<organization slug>.<random>`, and that
+  // organization's intake answers at `https://<slug>.in.endpointblank.com`.
+  // Only while `deriveBaseUrlFromClientId` is on: `*.in.endpointblank.com`
+  // has no DNS or TLS in production yet, so it defaults off, and off means
+  // today's default for every `clientId`. Logs are not derived: whether they
+  // get a per-organization hostname is still open, so `logBaseUrl` keeps its
+  // own default.
+  _derivedBaseUrl() {
+    if (!this._deriveBaseUrlFromClientId) return null;
+
+    const slug = clientIdSlug(this.clientId);
+    return slug === null ? null : `https://${slug}${DERIVED_BASE_URL_SUFFIX}`;
+  }
+
+  /**
+   * Whether {@link Configuration#baseUrl} falls back to the intake a
+   * slug-prefixed `clientId` names (sc-1463). Default `false`. Always a
+   * boolean: the setter refuses anything else with {@link ConfigurationError}
+   * and leaves the previous value in place.
+   */
+  get deriveBaseUrlFromClientId() {
+    return this._deriveBaseUrlFromClientId;
+  }
+
+  set deriveBaseUrlFromClientId(value) {
+    this._deriveBaseUrlFromClientId = validateDeriveBaseUrl(value);
   }
 
   /**
@@ -285,4 +369,12 @@ class Configuration {
 
 const instance = new Configuration();
 
-module.exports = { Configuration, LogMode, ConfigurationError, validateCacheTtl, instance };
+module.exports = {
+  Configuration,
+  LogMode,
+  ConfigurationError,
+  validateCacheTtl,
+  validateDeriveBaseUrl,
+  clientIdSlug,
+  instance,
+};

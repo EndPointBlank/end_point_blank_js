@@ -86,6 +86,7 @@ variable > default.**
 | `workerCount` | — | `4` | Number of concurrent in-flight batch requests `LogMode.DELAYED` uses when draining its background queue (Node is single-threaded, so this is concurrent `setImmediate`/async work rather than OS threads — the closest analog to the Ruby gem's threaded writer pool). |
 | `maskingRules` | — | `[]` | See [Data masking](#data-masking). |
 | `maskHook` | — | `null` | See [Data masking](#data-masking). |
+| `deriveBaseUrlFromClientId` | — | `false` | Derive the intake hostname from a slug-prefixed `clientId` when no base URL is set; must be a boolean, anything else throws `ConfigurationError`. See [Intake hostname from `clientId`](#intake-hostname-from-clientid). |
 
 Note: `environment` resolution differs slightly depending on where it's read from. `config.environment`
 itself resolves `explicit > ENDPOINTBLANK_ENV > null`. `SessionConfiguration.envName()` goes one step
@@ -94,8 +95,8 @@ want that chain. Error-report payloads no longer carry an `env` of their own: in
 no column for one, and derives a call's environment from the credential it presents.
 
 There is no env-var fallback for `applicationVersion`, `versionFinder`, `logMode`, `tokenTtl`,
-`cacheTtl`, `trustProxyHeaders`, `workerCount`, `maskingRules`, or `maskHook` — those must be
-set via `configure()`.
+`cacheTtl`, `trustProxyHeaders`, `workerCount`, `maskingRules`, `maskHook`, or
+`deriveBaseUrlFromClientId` — those must be set via `configure()`.
 
 ### `cacheTtl` values
 
@@ -146,6 +147,36 @@ forwarded headers there would not report *nothing* — it would confidently repo
 hostname on an internal port. `host` is caller-controlled either way (it has always come from
 the `Host` header), and none of these three values is ever used as an identity or
 authorization key, so the worst case is a wrong *suggestion* that an admin has to approve.
+
+### Intake hostname from `clientId`
+
+Each organization's intake will answer at its own hostname,
+`https://<slug>.in.endpointblank.com`, and every new `clientId` starts with that slug and a dot
+(`acima-x7k2mq.ijXI+MVwmrC5xH/9ZuGiQlAbAyobTqMa`). With `deriveBaseUrlFromClientId: true`, the
+SDK picks its intake in this order:
+
+1. `baseUrl`, or else `ENDPOINTBLANK_BASE_URL`, if either is set;
+2. else, if the `clientId` carries a slug prefix, `https://<slug>.in.endpointblank.com`;
+3. else `https://in.endpointblank.com`.
+
+A `clientId` carries a slug prefix only when the part before its first `.` has the exact shape
+of an organization slug and something follows the dot (`clientIdSlug` in `src/configuration`).
+A credential issued before slugs, including one with a `.` in it such as `my.client`, keeps
+calling `https://in.endpointblank.com`.
+
+**This is off by default, and turns on by default in a later release, once DNS and TLS for
+`*.in.endpointblank.com` are live.** Until then those hostnames do not resolve in production, so
+leave it off unless EndPointBlank has told you otherwise. With it off, the base URL is `baseUrl`,
+else `ENDPOINTBLANK_BASE_URL`, else `https://in.endpointblank.com`, whatever the `clientId`.
+
+The logs hostname is not derived: `logBaseUrl`, else `ENDPOINTBLANK_LOG_BASE_URL`, else
+`https://log.endpointblank.com`, as before.
+
+Every call to intake also sends `x-epb-sdk: js/<version>`, so EndPointBlank can tell which SDK
+versions use a credential before it moves an organization to another intake. The minimum JS
+version for a move is the release that turns `deriveBaseUrlFromClientId` on by default, **not**
+this one: with the option at its default here, the SDK keeps calling
+`https://in.endpointblank.com` after its organization has moved.
 
 **Explicit configuration:**
 
