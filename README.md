@@ -315,9 +315,13 @@ that target, and nothing else.
 **It never falls back to HTTP Basic (sc-1469).** Your `clientId`/`clientSecret` are never sent to a
 provider. When no token can be obtained — intake rejected the credential (401) or the request
 (other 4xx), intake failed (5xx), or it could not be reached (timeout, connection refused) —
-`header()` rejects with `TokenUnavailableError` instead of producing a header. Calling it with no
-URL, or with one that is not an absolute URL with a scheme and host, throws a `TypeError` and makes
-no request; there is no credential-based form.
+`header()` rejects with `TokenUnavailableError` instead of producing a header. Anything else that
+throws while minting (a bug, not an unreachable intake) is reported the same way, with
+`err.unexpected === true` and the thrown error as `err.cause`. Calling it with no URL, or with one
+that is not an absolute URL with a scheme and host, throws a `TypeError` (the Ruby gem raises
+`ArgumentError` for the same thing) and makes no request; there is no credential-based form. A
+missing `clientId` or `clientSecret` throws `ConfigurationError` and makes no request: it is not
+reported as a rejected credential.
 
 ```js
 const epb = require('end-point-blank-js');
@@ -330,10 +334,12 @@ try {
   const authHeader = await Authorization.header('https://api.example.com/orders');
   // ... call the provider with { Authorization: authHeader }
 } catch (err) {
-  if (!(err instanceof epb.TokenUnavailableError)) throw err;
-  // err.outcome: an epb.TokenOutcome value; a mint that threw is TRANSPORT_ERROR (see err.cause)
+  if (!(err instanceof epb.TokenUnavailableError)) throw err; // TypeError, ConfigurationError
+  // err.outcome: an epb.TokenOutcome value; a mint that threw is TRANSPORT_ERROR with
+  //              err.unexpected === true (see err.cause)
   // err.status:  intake's HTTP status, or null when none was obtained
-  // err.baseUrl: the URL the token was requested for: scheme, host, port and path only
+  // err.baseUrl: the URL the token was requested for: scheme, host, port (not the
+  //              scheme's default) and path only
   if (err.outcome === epb.TokenOutcome.CREDENTIAL_REJECTED) {
     // Permanent: re-issue this application's credential.
   } else {

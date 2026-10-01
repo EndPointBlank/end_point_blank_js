@@ -29,17 +29,22 @@ const { stripUrl } = require('./strip-url');
  *   deliberately not copied into this one. `null` only when no result was
  *   recorded.
  * - `status` — intake's HTTP status, or `null` when none was obtained.
+ * - `unexpected` — `true` when the mint threw rather than reporting a
+ *   failure (a bug, not an unreachable intake); `cause` holds what it threw.
+ *   The Ruby gem's `unexpected?`.
  */
 class TokenUnavailableError extends Error {
   /**
    * @param {string} baseUrl
-   * @param {{outcome?: string|null, status?: number|null, cause?: Error}} [details]
+   * @param {{outcome?: string|null, status?: number|null, cause?: Error,
+   *   unexpected?: boolean}} [details] `unexpected` is `true` when the mint
+   *   threw rather than reporting a failure.
    */
-  constructor(baseUrl, { outcome = null, status = null, cause } = {}) {
+  constructor(baseUrl, { outcome = null, status = null, cause, unexpected = false } = {}) {
     const stripped = stripUrl(baseUrl);
     super(
       `Could not mint an EndPointBlank access token for ${describeUrl(stripped)}: ` +
-        `${reason(outcome, status, cause)}. ` +
+        `${reason(outcome, status, unexpected)}. ` +
         'EndPointBlank never sends this service\'s client_id/client_secret ' +
         'to a provider, so there is no Basic-auth fallback and the call must ' +
         'not be made without a token.',
@@ -49,6 +54,7 @@ class TokenUnavailableError extends Error {
     this.baseUrl = stripped;
     this.outcome = outcome;
     this.status = status;
+    this.unexpected = unexpected === true;
   }
 }
 
@@ -57,12 +63,12 @@ function describeUrl(stripped) {
   return stripped !== null ? stripped : 'the requested URL (not shown: it could not be parsed)';
 }
 
-function reason(outcome, status, cause) {
+function reason(outcome, status, unexpected) {
   // Deliberately a fixed phrase: the cause's own message is not copied in (it
   // is not ours to vouch for and may carry anything). It stays available,
   // unaltered, on `err.cause`. Checked before the outcome because a mint that
   // threw is also reported as `transport_error`.
-  if (cause !== undefined) return 'the token request failed unexpectedly';
+  if (unexpected === true) return 'the token request failed unexpectedly';
 
   const http = status != null ? ` (HTTP ${status})` : '';
   switch (outcome) {

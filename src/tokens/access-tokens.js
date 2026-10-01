@@ -58,6 +58,10 @@ class AccessTokens {
    * @returns {Promise<string|null>} the access token, or `null` if generation
    *   failed — which includes a response that carried a token but no
    *   `base_url`, and a URL that could not be parsed (no request is made).
+   * @throws {Error} a `ConfigurationError` for missing client credentials, or
+   *   anything else the mint threw that is not a network error, as itself
+   *   (sc-1469). `Authorization.header` re-throws the first and wraps the
+   *   rest in `TokenUnavailableError`.
    */
   async token(baseUrl) {
     return (await this.tokenWithResult(baseUrl)).token;
@@ -77,6 +81,7 @@ class AccessTokens {
    * @returns {Promise<{token: string|null, result: {outcome: string, status: number|null}|null}>}
    *   `result` is `null` when no mint ran: a cached token was used, or the
    *   URL could not be parsed and no request was made.
+   * @throws {Error} as for {@link AccessTokens#token}.
    */
   async tokenWithResult(rawUrl) {
     // Everything below -- the cache lookup, the in-flight key, the failure

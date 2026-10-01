@@ -118,6 +118,11 @@ const GenerateAccessToken = {
    *   response it could not read.
    * @throws {TypeError} if `baseUrl` is not an absolute URL with a scheme and
    *   host. No request is made.
+   * @throws {ConfigurationError} if `clientId` or `clientSecret` is missing,
+   *   or the configured intake URL is unusable. No request is made.
+   * @throws {Error} anything else thrown while minting that is not a network
+   *   error (see `_http.post`), as itself. Only a request that never
+   *   completed is `TRANSPORT_ERROR` (sc-1469).
    */
   async tokenResult(baseUrl) {
     // Defensive: AccessTokens has already stripped it. Intake refuses a URL
@@ -201,6 +206,8 @@ const GenerateAccessToken = {
    * @param {string} baseUrl as for {@link GenerateAccessToken.tokenResult}.
    * @returns {Promise<object|null>} Object with `token`, `expired_at` and
    *   `base_url`, or `null` when no token was minted.
+   * @throws {Error} whatever {@link GenerateAccessToken.tokenResult} throws,
+   *   as itself.
    */
   async token(baseUrl) {
     const result = await GenerateAccessToken.tokenResult(baseUrl);

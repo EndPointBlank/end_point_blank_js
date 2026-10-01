@@ -12,8 +12,13 @@
  * guarantee the mint fails. Built from the parsed parts rather than by
  * splitting the string, so an empty `?` or `#` cannot slip through.
  *
- * The same helper, with the same behaviour, exists in the Python, Java,
- * Elixir and Ruby SDKs.
+ * Parsed with WHATWG `URL`, which lowercases the scheme and host, drops the
+ * scheme's default port (`:443` for https, `:80` for http) and an empty
+ * port, and refuses a non-numeric port, as the Ruby gem's `TargetUrl.strip`
+ * does for the port. Two differences from Ruby's `URI`: Ruby keeps the
+ * host's case, and `URL` percent-encodes the path and resolves `.`/`..`
+ * segments in it (`/a/../b` is kept as `/b`), where Ruby keeps the path as
+ * written. The Python, Java and Elixir SDKs have the same helper.
  *
  * @param {*} value the URL as the caller passed it.
  * @returns {string|null} the stripped URL, or `null` when `value` is not a

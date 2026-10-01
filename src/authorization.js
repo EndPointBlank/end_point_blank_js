@@ -1,6 +1,6 @@
 'use strict';
 
-const { instance: config } = require('./configuration');
+const { instance: config, ConfigurationError } = require('./configuration');
 const { TokenUnavailableError } = require('./token-unavailable-error');
 const { stripUrl } = require('./strip-url');
 
@@ -34,7 +34,11 @@ const Authorization = {
    *   absolute URL with a scheme and host. No request is made.
    * @throws {TokenUnavailableError} if no token could be obtained (the mint
    *   was rejected, intake failed or timed out, or it could not be reached).
-   *   No Basic header is ever produced in its place.
+   *   No Basic header is ever produced in its place. Anything unexpected
+   *   thrown while minting is reported the same way, as `transport_error`
+   *   with `unexpected: true` and the thrown error as `cause`.
+   * @throws {ConfigurationError} if `clientId` or `clientSecret` is missing,
+   *   or the configured intake URL is unusable. No request is made.
    */
   async header(baseUrl) {
     if (typeof baseUrl !== 'string' || baseUrl === '') {
@@ -66,9 +70,20 @@ const Authorization = {
     try {
       ({ token, result } = await AccessTokens.tokenWithResult(url));
     } catch (err) {
-      // No status was obtained, so this is a transport error; the thrown
-      // error rides along as `cause` and its text stays out of the message.
-      throw new TokenUnavailableError(url, { outcome: 'transport_error', cause: err });
+      // A missing credential is not a failed mint: nothing was sent, and
+      // retrying cannot help. Let it be seen as itself (sc-1469).
+      if (err instanceof ConfigurationError) throw err;
+      // A bug, not a failure intake reported: an unreachable intake arrives
+      // as a TRANSPORT_ERROR result, not a throw. It still becomes the one
+      // error this method documents, marked `unexpected`, so a caller
+      // handling TokenUnavailableError is not met by a TypeError instead.
+      // The thrown error rides along as `cause`; its text stays out of the
+      // message.
+      throw new TokenUnavailableError(url, {
+        outcome: 'transport_error',
+        cause: err,
+        unexpected: true,
+      });
     }
     if (token) return `Bearer ${token}`;
 
@@ -85,6 +100,8 @@ const Authorization = {
    * Internal: not for outbound calls to providers. See the module comment.
    *
    * @returns {string} `"Basic <credentials>"`
+   * @throws {ConfigurationError} if `clientId` or `clientSecret` is missing
+   *   or empty (see {@link Authorization.basicCredentials}).
    */
   intakeHeader() {
     return `Basic ${this.basicCredentials()}`;
@@ -94,10 +111,25 @@ const Authorization = {
    * Returns the Base64-encoded `clientId:clientSecret` string.
    *
    * @returns {string}
+   * @throws {ConfigurationError} if `clientId` or `clientSecret` is missing
+   *   or empty. Interpolating them would quietly send `null:null` (or `:`)
+   *   to intake, which answers 401 -- a misconfiguration reported as a
+   *   revoked credential, with "re-issue the credential" as the advice
+   *   (sc-1469).
    */
   basicCredentials() {
-    const raw = `${config.clientId}:${config.clientSecret}`;
-    return Buffer.from(raw).toString('base64');
+    const { clientId, clientSecret } = config;
+    const missing = [];
+    if (clientId == null || clientId === '') missing.push('clientId');
+    if (clientSecret == null || clientSecret === '') missing.push('clientSecret');
+    if (missing.length > 0) {
+      throw new ConfigurationError(
+        `EndPointBlank is missing ${missing.join(' and ')}: set it with configure() ` +
+          'or ENDPOINTBLANK_CLIENT_ID / ENDPOINTBLANK_CLIENT_SECRET. The SDK cannot ' +
+          'authenticate to its intake without both.',
+      );
+    }
+    return Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
   },
 };
 

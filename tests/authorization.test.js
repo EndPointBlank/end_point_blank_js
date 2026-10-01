@@ -179,9 +179,41 @@ describe('header(baseUrl): outbound calls to a provider', () => {
       expect(err.outcome).toBe(TokenOutcome.TRANSPORT_ERROR);
       expect(err.status).toBeNull();
       expect(err.message).toMatch(/could not be reached \(timeout/);
+      expect(err.unexpected).toBe(false);
       // post() retried; every attempt went to intake, none to the provider.
       expect(requests.length).toBeGreaterThan(1);
       expectBasicOnlyToIntake();
+    });
+
+    test('a refused connection is a transport error, retried', async () => {
+      respondWith(() => {
+        throw new TypeError('fetch failed', { cause: Object.assign(new Error('connect'), { code: 'ECONNREFUSED' }) });
+      });
+
+      const err = await Authorization.header(PROVIDER_URL).catch(e => e);
+
+      expect(err).toBeInstanceOf(TokenUnavailableError);
+      expect(err.outcome).toBe(TokenOutcome.TRANSPORT_ERROR);
+      expect(err.unexpected).toBe(false);
+      expect(err.cause).toBeUndefined();
+      expect(requests.length).toBeGreaterThan(1);
+    });
+
+    test('a fetch error that is not a network error is unexpected, and not retried (sc-1469)', async () => {
+      const bug = new TypeError('Failed to parse URL from nope');
+      respondWith(() => {
+        throw bug;
+      });
+
+      const err = await Authorization.header(PROVIDER_URL).catch(e => e);
+
+      expect(err).toBeInstanceOf(TokenUnavailableError);
+      expect(err.outcome).toBe(TokenOutcome.TRANSPORT_ERROR);
+      expect(err.unexpected).toBe(true);
+      expect(err.cause).toBe(bug);
+      expect(err.message).toMatch(/the token request failed unexpectedly/);
+      expect(err.message).not.toMatch(/could not be reached/);
+      expect(requests).toHaveLength(1);
     });
 
     test('a 2xx that carried no token', async () => {
@@ -203,6 +235,7 @@ describe('header(baseUrl): outbound calls to a provider', () => {
       expect(err).toBeInstanceOf(TokenUnavailableError);
       expect(err.outcome).toBe(TokenOutcome.TRANSPORT_ERROR);
       expect(err.status).toBeNull();
+      expect(err.unexpected).toBe(true);
       expect(err.cause).toBe(boom);
       expect(err.message).toBe(
         `Could not mint an EndPointBlank access token for ${PROVIDER_URL}: ` +
@@ -309,7 +342,7 @@ describe('header(baseUrl): outbound calls to a provider', () => {
       'intake failed to issue a token; this may be transient'],
     ['transport_error', { outcome: 'transport_error' },
       'intake could not be reached (timeout, connection refused or retries exhausted); this may be transient'],
-    ['a mint that threw', { outcome: 'transport_error', cause: new Error('boom') },
+    ['a mint that threw', { outcome: 'transport_error', cause: new Error('boom'), unexpected: true },
       'the token request failed unexpectedly'],
     ['no result recorded', {},
       'the token request failed for an unknown reason'],
@@ -344,6 +377,46 @@ describe('header(baseUrl): outbound calls to a provider', () => {
   test('TokenUnavailableError is exported from the package entry point', () => {
     expect(epb.TokenUnavailableError).toBe(require('../src/authorization').TokenUnavailableError);
     expect(new TokenUnavailableError('https://x.test')).toBeInstanceOf(Error);
+  });
+});
+
+describe('missing client credentials (sc-1469)', () => {
+  // Interpolating a missing credential would send `Basic null:null` (or `:`)
+  // to intake, whose 401 reads as a revoked credential -- "re-issue the
+  // credential" is the wrong advice for a setting nobody made.
+  test.each([
+    ['clientId', { clientId: null }, /missing clientId:/],
+    ['clientSecret', { clientSecret: null }, /missing clientSecret:/],
+    ['both', { clientId: null, clientSecret: null }, /missing clientId and clientSecret:/],
+    ['an empty clientId', { clientId: '' }, /missing clientId:/],
+    ['an empty clientSecret', { clientSecret: '' }, /missing clientSecret:/],
+  ])('intakeHeader() throws ConfigurationError for %s', (_label, settings, named) => {
+    Object.assign(config, settings);
+
+    expect(() => Authorization.intakeHeader()).toThrow(epb.ConfigurationError);
+    expect(() => Authorization.intakeHeader()).toThrow(named);
+  });
+
+  test('header(baseUrl) re-throws it as itself, not as a transport error, and sends nothing', async () => {
+    config.clientSecret = null;
+    respondWith(() => minted('tok-1'));
+
+    const err = await Authorization.header(PROVIDER_URL).catch(e => e);
+
+    expect(err).toBeInstanceOf(epb.ConfigurationError);
+    expect(err).not.toBeInstanceOf(TokenUnavailableError);
+    expect(err.message).toMatch(/missing clientSecret/);
+    expect(requests).toHaveLength(0);
+  });
+
+  test('the next call after configuring them mints normally', async () => {
+    config.clientId = null;
+    respondWith(() => minted('tok-1'));
+    await Authorization.header(PROVIDER_URL).catch(() => {});
+
+    config.clientId = 'test-client-id';
+
+    await expect(Authorization.header(PROVIDER_URL)).resolves.toBe('Bearer tok-1');
   });
 });
 
