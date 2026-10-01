@@ -53,6 +53,14 @@ function payloadsSentTo(url) {
 
 beforeEach(() => {
   post.mockClear();
+  // The writers' Basic header refuses to build without both (sc-1469).
+  config.clientId = 'test-client-id';
+  config.clientSecret = 'test-client-secret';
+});
+
+afterEach(() => {
+  config.clientId = null;
+  config.clientSecret = null;
 });
 
 describe('reportInteraction', () => {

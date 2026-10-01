@@ -2,7 +2,7 @@
 
 jest.mock('../src/commands/_http', () => ({ post: jest.fn() }));
 jest.mock('../src/authorization', () => ({
-  Authorization: { header: jest.fn(async () => 'Basic dGVzdA==') },
+  Authorization: { intakeHeader: jest.fn(() => 'Basic dGVzdA==') },
 }));
 
 const { post } = require('../src/commands/_http');

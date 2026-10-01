@@ -104,6 +104,23 @@ describe('EndpointUpdate', () => {
       expect(console.error).toHaveBeenCalled();
     });
 
+    test('logs a missing client credential instead of rejecting (sc-1469)', async () => {
+      config.clientId = null;
+
+      await expect(EndpointUpdate.sendUpdate(endpoints)).resolves.toBeUndefined();
+      expect(post).not.toHaveBeenCalled();
+      expect(console.error).toHaveBeenCalledWith(
+        expect.stringMatching(/ConfigurationError: .*missing clientId/),
+      );
+    });
+
+    test('logs an error post() throws instead of rejecting (sc-1469)', async () => {
+      post.mockRejectedValue(new TypeError('Failed to parse URL from nope'));
+
+      await expect(EndpointUpdate.sendUpdate(endpoints)).resolves.toBeUndefined();
+      expect(console.error).toHaveBeenCalledWith(expect.stringMatching(/TypeError: Failed to parse URL/));
+    });
+
     test('gives up quietly when the service is unreachable', async () => {
       post.mockResolvedValue(null);
 

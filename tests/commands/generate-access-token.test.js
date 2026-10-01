@@ -35,6 +35,20 @@ describe('GenerateAccessToken.token', () => {
     expect(body).toEqual({ base_url: BASE_URL });
   });
 
+  test('throws ConfigurationError, sending nothing, when a client credential is missing (sc-1469)', async () => {
+    config.clientSecret = null;
+
+    await expect(GenerateAccessToken.tokenResult(BASE_URL)).rejects.toThrow(/missing clientSecret/);
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  test('lets an error post() throws propagate rather than calling it a transport error (sc-1469)', async () => {
+    const bug = new TypeError('Failed to parse URL from nope');
+    post.mockRejectedValue(bug);
+
+    await expect(GenerateAccessToken.tokenResult(BASE_URL)).rejects.toBe(bug);
+  });
+
   test('presents the configured client credentials', async () => {
     // A token request is the one call that cannot itself use a token, so it
     // must go out as Basic or the SDK can never bootstrap.

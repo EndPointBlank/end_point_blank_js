@@ -33,7 +33,7 @@ class DirectWriter {
    * @returns {Promise<void>}
    */
   async write(payloads) {
-    const authHeader = await Authorization.header();
+    const authHeader = Authorization.intakeHeader();
     const response = await post(this._url, authHeader, { payload: payloads });
     if (response && response.status > 299) {
       console.warn(`[EndPointBlank] Write failed: ${response.status}`);

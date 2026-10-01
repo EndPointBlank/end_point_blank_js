@@ -208,8 +208,9 @@ router.use(authenticated);
 Successful `authorized` checks are cached in-process (keyed on credentials + path + method +
 `appName`) for `cacheTtl` seconds, so repeat calls to the same endpoint skip the network round
 trip. Authorization and authentication requests to EndPointBlank use HTTP Basic auth built from
-`clientId`/`clientSecret` (`Authorization.header()`) — EndPointBlank already holds this service's
-credential, so minting a token to present it back would buy nothing.
+`clientId`/`clientSecret` (built internally by `Authorization.intakeHeader()`) — EndPointBlank
+already holds this service's credential, so minting a token to present it back would buy nothing.
+That Basic header only ever goes to EndPointBlank intake; it is never sent to a provider (see below).
 
 `cacheTtl` is consulted fresh on every cache read, not only when an entry is written, so a
 `configure({ cacheTtl: ... })` call made while the process is running takes effect immediately
@@ -308,15 +309,53 @@ they must not be collapsed:
 `Authorization.header(baseUrl)` — required by its real path under `src/`, same as any other
 submodule not covered by the `end-point-blank-js`/`/express`/`/middleware` entry points (see
 "Note on requiring submodules" above) — builds the `Authorization` header for a call *you* are
-making to another EndPointBlank-registered target: a `Bearer` token for that target when one can
-be obtained, otherwise HTTP Basic auth.
+making to another EndPointBlank-registered target (a provider). It answers a `Bearer` token for
+that target, and nothing else.
+
+**It never falls back to HTTP Basic (sc-1469).** Your `clientId`/`clientSecret` are never sent to a
+provider. When no token can be obtained — intake rejected the credential (401) or the request
+(other 4xx), intake failed (5xx), or it could not be reached (timeout, connection refused) —
+`header()` rejects with `TokenUnavailableError` instead of producing a header. Anything else that
+throws while minting (a bug, not an unreachable intake) is reported the same way, with
+`err.unexpected === true` and the thrown error as `err.cause`. Calling it with no URL, or with one
+that is not an absolute http or https URL with a host, throws a `TypeError` (the Ruby gem raises
+`ArgumentError` for the same thing) and makes no request; there is no credential-based form. A
+missing `clientId` or `clientSecret` throws `ConfigurationError` and makes no request: it is not
+reported as a rejected credential.
 
 ```js
+const epb = require('end-point-blank-js');
 const { Authorization } = require('end-point-blank-js/src/authorization');
 
-// Pass the URL you are about to call, NOT a hostname.
-// Strip any query string or fragment first -- intake rejects both.
-const authHeader = await Authorization.header('https://api.example.com/orders');
+try {
+  // Pass the URL you are about to call, NOT a hostname.
+  // userinfo, query and fragment are removed before the token request; they are
+  // never sent to intake, logged, or kept on the error.
+  const authHeader = await Authorization.header('https://api.example.com/orders');
+  // ... call the provider with { Authorization: authHeader }
+} catch (err) {
+  if (!(err instanceof epb.TokenUnavailableError)) throw err; // TypeError, ConfigurationError
+  // err.outcome: an epb.TokenOutcome value; a mint that threw is TRANSPORT_ERROR with
+  //              err.unexpected === true (see err.cause)
+  // err.status:  intake's HTTP status, or null when none was obtained
+  // err.baseUrl: the URL the token was requested for: scheme, host, port (not the
+  //              scheme's default) and path only
+  if (err.outcome === epb.TokenOutcome.CREDENTIAL_REJECTED) {
+    // Permanent: re-issue this application's credential.
+  } else {
+    // Do not call the provider unauthenticated or with other credentials;
+    // fail the operation, or retry later for a transient outcome.
+  }
+}
+```
+
+The error's message says which of these happened, for example:
+
+```
+Could not mint an EndPointBlank access token for https://api.example.com/orders: intake could
+not be reached (timeout, connection refused or retries exhausted); this may be transient.
+EndPointBlank never sends this service's client_id/client_secret to a provider, so there is no
+Basic-auth fallback and the call must not be made without a token.
 ```
 
 The argument is the URL you are about to call. Intake matches it against the registered base URLs
@@ -325,13 +364,13 @@ by longest path prefix, so you do not need to know how the target registered its
 
 Tokens are cached per application environment, keyed on the canonical base URL intake resolves the
 request to (not on the URL you passed), so a service that calls several targets holds a token for
-each. Calling `Authorization.header()` with no argument — as the route guards above do — always
-returns the Basic form.
+each.
 
 #### Why a token could not be obtained
 
-`Authorization.header(baseUrl)` falls back to Basic when no token can be minted, and
-`AccessTokens.token(baseUrl)` answers `null`. Neither says *why*, and the difference matters: a
+`Authorization.header(baseUrl)` carries the reason on the `TokenUnavailableError` it throws
+(`outcome`, `status`). The lower-level `AccessTokens.token(baseUrl)` answers `null` and does not
+say *why* on its own, and the difference matters: a
 `401` from intake means the client credential is invalid or revoked and no amount of retrying will
 change that, while a `5xx` or a dropped connection is worth trying again. A `400` or `422` is
 permanent too, but the fix is the request or the target's registration rather than the credential.
@@ -562,7 +601,8 @@ src/
   version.js                   # VERSION, read from package.json so it cannot drift
   configuration.js             # Configuration singleton + ENDPOINTBLANK_* env fallbacks
   session-configuration.js     # environment name resolution for error payloads
-  authorization.js             # Basic/Bearer auth header generation
+  authorization.js             # Bearer header for provider calls; Basic for intake only
+  token-unavailable-error.js   # Thrown when no provider token can be obtained
   unauthorized-error.js        # UnauthorizedError
   request-store.js             # AsyncLocalStorage-based per-request context
   payload-builder.js           # Builds application-error payloads for intake's error ingest

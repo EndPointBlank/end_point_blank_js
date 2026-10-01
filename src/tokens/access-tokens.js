@@ -1,5 +1,7 @@
 'use strict';
 
+const { stripUrl } = require('../strip-url');
+
 const REFRESH_BUFFER_MS = 2 * 60 * 1000; // 2 minutes
 const MIN_TTL_MS = 30 * 1000; // 30 seconds
 
@@ -39,7 +41,7 @@ class AccessTokens {
   constructor() {
     /** @type {Map<string, {token: string, expiredAt: Date}>} */
     this._entries = new Map();
-    /** @type {Map<string, Promise<string|null>>} */
+    /** @type {Map<string, Promise<{token: string|null, result: object|null}>>} */
     this._inflight = new Map();
     /** @type {Map<string, {outcome: string, status: number|null}>} */
     this._failures = new Map();
@@ -49,17 +51,48 @@ class AccessTokens {
    * Returns a valid access token covering *baseUrl*, fetching one if no
    * usable entry covers it.
    *
-   * @param {string} baseUrl the URL you are about to call, with any query
-   *   string and fragment removed. It is sent verbatim; intake normalizes it
-   *   and matches it against registered base URLs by longest path prefix.
+   * @param {string} baseUrl the URL you are about to call. Userinfo, query
+   *   and fragment are removed first (see `stripUrl`); the rest is sent, and
+   *   intake normalizes it and matches it against registered base URLs by
+   *   longest path prefix.
    * @returns {Promise<string|null>} the access token, or `null` if generation
    *   failed — which includes a response that carried a token but no
-   *   `base_url`.
+   *   `base_url`, and a URL that could not be parsed (no request is made).
+   * @throws {Error} a `ConfigurationError` for missing client credentials, or
+   *   anything else the mint threw that is not a network error, as itself
+   *   (sc-1469). `Authorization.header` re-throws the first and wraps the
+   *   rest in `TokenUnavailableError`.
    */
   async token(baseUrl) {
+    return (await this.tokenWithResult(baseUrl)).token;
+  }
+
+  /**
+   * Like {@link AccessTokens#token}, but also answers how *this* call's token
+   * was obtained, so a caller can explain a failure from its own attempt
+   * rather than reading {@link AccessTokens#lastFailure} afterwards -- by
+   * which time a concurrent call for the same URL may have overwritten or
+   * cleared the record (sc-1469).
+   *
+   * A caller that joined an in-flight exchange shares that exchange's result,
+   * which is the attempt its token (or lack of one) came from.
+   *
+   * @param {string} baseUrl as for {@link AccessTokens#token}.
+   * @returns {Promise<{token: string|null, result: {outcome: string, status: number|null}|null}>}
+   *   `result` is `null` when no mint ran: a cached token was used, or the
+   *   URL could not be parsed and no request was made.
+   * @throws {Error} as for {@link AccessTokens#token}.
+   */
+  async tokenWithResult(rawUrl) {
+    // Everything below -- the cache lookup, the in-flight key, the failure
+    // record, the log lines and the request body -- sees only the stripped
+    // form (sc-1469).
+    const baseUrl = stripUrl(rawUrl);
+    if (baseUrl === null) return { token: null, result: null };
+
     const entry = this._match(baseUrl);
     if (usable(entry)) {
-      return entry.token;
+      return { token: entry.token, result: null };
     }
 
     // Coalesce concurrent exchanges for the same requested URL.
@@ -92,6 +125,11 @@ class AccessTokens {
     // this URL too -- and a failure here would delete that good entry for a
     // problem that was never its own.
     const matchedKey = this._matchKey(baseUrl);
+    // A throw here (a ConfigurationError, or a non-network error from the
+    // mint, sc-1469) propagates past everything below on purpose: nothing is
+    // recorded for lastFailure() and the matched entry is left alone, as the
+    // Ruby gem does. There is no outcome to record -- it is not something
+    // intake answered -- and Authorization.header reports the throw itself.
     const result = await GenerateAccessToken.tokenResult(baseUrl);
 
     // SUCCESS is the whole test, because SUCCESS already means a token was
@@ -129,7 +167,7 @@ class AccessTokens {
       // Whatever went wrong before is over; a stale record would have a
       // caller acting on an outage that has already ended.
       this._failures.delete(baseUrl);
-      return payload.token;
+      return { token: payload.token, result: outcomeOf(result) };
     }
 
     // A failed refresh must not leave an expiring token behind claiming to be
@@ -152,21 +190,21 @@ class AccessTokens {
 
     if (result.outcome === TokenOutcome.CREDENTIAL_REJECTED) {
       // Deliberately not the generic line below. This one will not fix
-      // itself: every subsequent request mints, gets another 401, and hands
-      // the caller a Basic fallback it never asked for, until somebody reads
-      // this and acts on it.
+      // itself: every subsequent request mints, gets another 401, and
+      // `Authorization.header()` throws TokenUnavailableError for it, until
+      // somebody reads this and acts on it.
       console.error(
         `[EndPointBlank] Access token request for ${baseUrl} was REJECTED (HTTP 401): ` +
           'the client credential is invalid or revoked. Retrying cannot help -- ' +
           're-issue the credential and update this application\'s configuration.',
       );
-      return null;
+      return { token: null, result: outcomeOf(result) };
     }
 
     console.error(
       `[EndPointBlank] Failed to generate access token for ${baseUrl}: ${failureReason(result)}`,
     );
-    return null;
+    return { token: null, result: outcomeOf(result) };
   }
 
   /**
@@ -189,14 +227,18 @@ class AccessTokens {
   /**
    * Why the last attempt to mint a token for *baseUrl* failed, or `null`.
    *
+   * Only a failure intake reported, or a request that never completed, is
+   * recorded. A mint that threw (see `_fetch`) leaves this as it was, so it
+   * can still describe an earlier attempt.
+   *
    * @param {string} baseUrl the URL that was asked for -- the same argument
-   *   {@link AccessTokens#token} was called with, not the base URL intake
-   *   resolves it to. A failed mint never learns the canonical base URL,
+   *   {@link AccessTokens#token} was called with (stripped the same way), not
+   *   the base URL intake resolves it to. A failed mint never learns the canonical base URL,
    *   so there is nothing else it could be keyed on.
    * @returns {{outcome: string, status: number|null}|null}
    */
   lastFailure(baseUrl) {
-    const record = this._failures.get(baseUrl);
+    const record = this._failures.get(stripUrl(baseUrl));
     return record !== undefined ? record : null;
   }
 
@@ -207,7 +249,7 @@ class AccessTokens {
    * @returns {boolean}
    */
   exists(baseUrl) {
-    const entry = this._match(baseUrl);
+    const entry = this._match(stripUrl(baseUrl));
     return Boolean(entry && entry.expiredAt > new Date(Date.now() + MIN_TTL_MS));
   }
 
@@ -278,6 +320,14 @@ class AccessTokens {
     const key = this._matchKey(baseUrl);
     return key !== null ? this._entries.get(key) : null;
   }
+}
+
+/** The part of a mint's result a caller may act on: never the payload. */
+function outcomeOf(result) {
+  return Object.freeze({
+    outcome: result.outcome,
+    status: result.status != null ? result.status : null,
+  });
 }
 
 function usable(entry) {
@@ -360,6 +410,7 @@ const instance = new AccessTokens();
 module.exports = {
   AccessTokens: {
     token: (baseUrl) => instance.token(baseUrl),
+    tokenWithResult: (baseUrl) => instance.tokenWithResult(baseUrl),
     exists: (baseUrl) => instance.exists(baseUrl),
     invalidate: (staleToken) => instance.invalidate(staleToken),
     lastFailure: (baseUrl) => instance.lastFailure(baseUrl),
