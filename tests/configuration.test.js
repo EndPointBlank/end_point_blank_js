@@ -673,6 +673,14 @@ describe('sc-1463: baseUrl derived from clientId', () => {
     expect(config.endpointUpdateUrl).toBe(`${DERIVED}/api/application_updates`);
   });
 
+  test('with derivation on, a slug at the 20-character label limit still derives', () => {
+    // The longest label app_portal makes; one character more is refused
+    // (see the 21-character case under clientIdSlug).
+    epb.configure({ deriveBaseUrlFromClientId: true, clientId: 'abcdefghij0123456789-x7k2mq.r' });
+
+    expect(config.baseUrl).toBe('https://abcdefghij0123456789-x7k2mq.in.endpointblank.com');
+  });
+
   test('with derivation on, the clientId may come from ENDPOINTBLANK_CLIENT_ID', () => {
     process.env.ENDPOINTBLANK_CLIENT_ID = PREFIXED;
     epb.configure({ deriveBaseUrlFromClientId: true });
