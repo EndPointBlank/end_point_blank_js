@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **A management API client (sc-1501):** `ManagementClient`, from the new
+  `end-point-blank-js/management` entry point, with TypeScript declarations.
+  It calls the EndPointBlank management API (`/api/v1`) with a management
+  key (`epb_mk_...`): the organization, API packages and what they publish,
+  the endpoint lookup, clients (invites, with pre-assigned packages and
+  grants, and managed clients), package assignments, direct grants,
+  applications and their environments, environments, and runtime
+  credentials (create, rotate, revoke). `forManagedClient(id)` makes the
+  application, environment and credential calls for a managed client under
+  `/clients/:client_id/...`, and `claimInvite` hands it over.
+  - Lists answer one page (`{data, next_cursor}`) and have `listAll` and
+    `pages` async iterators that follow the cursor.
+  - Every POST sends an `Idempotency-Key` (generated unless you pass one),
+    the same on each retry. 429 waits `Retry-After`; 5xx and network errors
+    are retried for GET, DELETE and POST, never PATCH; bounded by
+    `maxRetries` (default 2, `0` turns it off).
+    `idempotency_replay_unavailable` is never retried.
+  - Failures are `ManagementApiError` with `code`, `message`, `details`,
+    `status` and `retryAfter`; `ErrorCode` lists the documented codes, and
+    an unknown code still comes through as sent.
+  - Entirely separate from `configure()`: the key is sent only as a Bearer
+    token, only to the management API, and is redacted from `inspect`,
+    JSON and errors; runtime credentials are never sent. The runtime entry
+    points do not load it. No new dependencies.
+
 ## 0.13.0
 
 ### Breaking changes
