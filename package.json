@@ -15,6 +15,10 @@
     ".": "./src/index.js",
     "./middleware": "./src/middleware/report-interaction.js",
     "./express": "./src/express/index.js",
+    "./management": {
+      "types": "./src/management/index.d.ts",
+      "default": "./src/management/index.js"
+    },
     "./package.json": "./package.json",
     "./src/*": "./src/*.js"
   },

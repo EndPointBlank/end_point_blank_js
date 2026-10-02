@@ -49,8 +49,9 @@ app.use(reportInteractionErrorHandler); // must be registered after your routes
 
 > **Note on requiring submodules:** the package's `main` entry (`src/index.js`) exports the
 > top-level `configure`/`VERSION`/`LogMode`/`TokenOutcome`/`UnauthorizedError`/`config` API. The Express
-> integration is available as a whole via `require('end-point-blank-js/express')` and the
-> reporting middleware via `require('end-point-blank-js/middleware')` (see the `exports` map in
+> integration is available as a whole via `require('end-point-blank-js/express')`, the
+> reporting middleware via `require('end-point-blank-js/middleware')` and the management API
+> client via `require('end-point-blank-js/management')` (see the `exports` map in
 > `package.json`). Everything else (individual writers, commands, etc.) can still be required by
 > its real path under `src/`, e.g. `require('end-point-blank-js/src/writers/log-writer')`.
 
@@ -556,6 +557,159 @@ actual outgoing wire payload — `request_body` targets the `request` key, `requ
 `path`. `LogWriter` log entries are not affected by masking rules (there is no `log` field
 mapping).
 
+## Management API
+
+`ManagementClient` calls the EndPointBlank management API (`/api/v1`): the things an organization
+admin does in the portal (API packages, clients, package assignments, grants, applications,
+environments, runtime credentials), done from code. It is separate from the runtime client above:
+
+- It authenticates with a **management API key** (`epb_mk_...`, created in the portal under
+  Settings > API Keys), sent only as `Authorization: Bearer` and only to its own `baseUrl`. It
+  never reads `configure()`'s settings or any `ENDPOINTBLANK_*` variable, and never sends a
+  runtime `clientId`/`clientSecret` (the management API refuses them anyway).
+- It loads from its own entry point, `end-point-blank-js/management`, so an application that
+  only uses the runtime client never loads it. TypeScript declarations ship with it
+  (`src/management/index.d.ts`).
+- The key is held privately: `util.inspect`, `JSON.stringify` and `String()` of the client show
+  `epb_mk_[REDACTED]`, and no error carries it. The client logs nothing.
+- `baseUrl` must be `https`; plain `http` is allowed only for `localhost`, `127.0.0.1` and
+  `[::1]`, so the key never crosses a network in cleartext. Redirects are not followed.
+- An id made only of dots (`.`, `..`) is refused with a `TypeError` before any request: it would
+  otherwise be resolved as a path dot-segment and reach a different resource.
+
+### Quickstart
+
+```js
+const { ManagementClient, ManagementApiError, ErrorCode } = require('end-point-blank-js/management');
+
+const mgmt = new ManagementClient({
+  apiKey: process.env.EPB_MGMT_KEY, // epb_mk_...
+  // baseUrl: 'https://app.endpointblank.com', // the default; no /api/v1
+});
+
+const org = await mgmt.organization.get(); // { id, name, slug, key: { name, scope } }
+
+// Lists: one page, or every item with `for await` (pages follow next_cursor for you)
+const page = await mgmt.clients.list({ limit: 100 }); // { data, next_cursor }
+for await (const client of mgmt.clients.listAll({ limit: 100 })) {
+  console.log(client.name, client.status);
+}
+
+// Invite a client, and assign it an API package
+const apiPackage = await mgmt.apiPackages.create({ name: 'Partner tier' });
+const { data: [endpoint] } = await mgmt.endpoints.list({ application_id: appId });
+await mgmt.apiPackages.endpoints.add(apiPackage.id, {
+  application_id: appId,
+  endpoint_id: endpoint.id, // omit for every endpoint of the application
+  environment_id: productionId,
+});
+
+const client = await mgmt.clients.create({
+  name: 'Acme Corp',
+  contacts: [{ email: 'dev@acme.example', first_name: 'Dana', last_name: 'Lee' }],
+});
+// client.invite_code is what Acme accepts the invite with (write keys only).
+await mgmt.clients.packages.assign(client.id, {
+  api_package_id: apiPackage.id,
+  environment_id: productionId,
+}); // status "pending" until Acme accepts, then "active"
+
+// Runtime credentials: the secret is in the create/rotate answer and nowhere else
+const credential = await mgmt.credentials.create({ application_environment_id: appEnvId });
+store(credential.client_id, credential.client_secret);
+const rotated = await mgmt.credentials.rotate(credential.id); // old secret works for the grace window
+store(rotated.client_id, rotated.client_secret);
+await mgmt.credentials.revoke(credential.id);
+
+// Errors: match on code
+try {
+  await mgmt.clients.create({ name: 'One more' });
+} catch (err) {
+  if (!(err instanceof ManagementApiError)) throw err;
+  switch (err.code) {
+    case ErrorCode.PLAN_LIMIT: // 402
+      break;
+    case ErrorCode.VALIDATION_FAILED: // 422; err.details lists the fields
+      console.error(err.details);
+      break;
+    default:
+      throw err; // err.status, err.message, err.requestId
+  }
+}
+```
+
+Request bodies and answers use the API's own field names (snake_case), as documented at
+`/docs/management-api` and in `GET /api/v1/openapi.json`. Single-resource calls answer the `data`
+object (a delete answers `{ id, deleted: true }`); `apiPackages.endpoints.add`/`remove` answer
+`{ data, warnings }`, where `warnings` lists client assignments that now derive no grant. Each
+list resource has `list(params)` (one page), `listAll(params)` (each item) and `pages(params)`
+(each page); `limit` is 1 to 100 (default 50).
+
+| Resource | Methods |
+|---|---|
+| `organization` | `get()` |
+| `apiPackages` | `list`, `listAll`, `pages`, `create`, `get`, `update`, `delete` |
+| `apiPackages.endpoints` | `list(packageId)`, `listAll`, `pages`, `add(packageId, body)`, `remove(packageId, accessId)` |
+| `endpoints` | `list({ application_id, version })`, `listAll`, `pages` |
+| `clients` | `list`, `listAll`, `pages`, `create` (invite, or `managed: true`), `get`, `delete`, `claimInvite(clientId, { email })` |
+| `clients.packages` | `list(clientId)`, `listAll`, `pages`, `assign(clientId, body)`, `update(clientId, id, { environment_id })`, `remove(clientId, id)` |
+| `clients.grants` | `list(clientId)`, `listAll`, `pages`, `create(clientId, body)`, `revoke(clientId, id)` |
+| `applications` | `list`, `listAll`, `pages`, `create`, `get`, `update`, `delete` |
+| `applications.environments` | `list(applicationId)`, `listAll`, `pages`, `create(applicationId, { environment_id, base_url })`, `delete(applicationId, id)` |
+| `environments` | `list`, `listAll`, `pages`, `create`, `get`, `update`, `delete` |
+| `credentials` | `list({ application_environment_id })`, `listAll`, `pages`, `get`, `create`, `rotate`, `revoke` |
+
+### Managed clients
+
+A managed client is a client organization you create and run for your customer until they claim
+it. `forManagedClient(id)` gives the same `applications`, `environments` and `credentials` calls,
+made under `/clients/:client_id/...` for that client:
+
+```js
+const managed = await mgmt.clients.create({ name: 'Globex', managed: true });
+const globex = mgmt.forManagedClient(managed.id);
+
+const env = await globex.environments.create({ name: 'production-eu', domain: 'eu.globex.example' });
+const app = await globex.applications.create({
+  name: 'Globex backend',
+  environment_base_urls: { [env.id]: 'https://api.globex.example' },
+});
+const { data: [appEnv] } = await globex.applications.environments.list(app.id);
+const credential = await globex.credentials.create({ application_environment_id: appEnv.id });
+
+// Packages and grants are assigned to it like any accepted client's
+await mgmt.clients.packages.assign(managed.id, { api_package_id: apiPackage.id, environment_id: productionId });
+
+// Hand it over: the customer claims it by accepting this emailed invite
+await globex.claimInvite({ email: 'owner@globex.example' });
+```
+
+Once the customer claims it, every `forManagedClient` call for it answers 404 `not_found`.
+
+### Retries, idempotency and errors
+
+- Every POST sends an `Idempotency-Key`: a generated UUID, or yours with
+  `{ idempotencyKey: '...' }` as the last argument. Every retry of that call sends the same key,
+  so the server runs it once.
+- A 429 `rate_limited` waits the `Retry-After` seconds and tries again. 5xx answers (such as
+  `audit_unavailable`, `intake_unavailable`, `internal_server_error`) and network errors are
+  retried for GET, DELETE and POST, with backoff; a PATCH is never retried once it may have
+  reached the server. A 409 `idempotency_request_in_progress` is retried with the same key.
+- At most `maxRetries` retries (default 2); `maxRetries: 0` (or `false`) turns retrying off. A
+  `Retry-After` longer than `maxRetryWaitMs` (default 60000) is thrown instead of waited on.
+  Other options: `timeoutMs` per attempt (default 30000), `retryBaseDelayMs` (default 500),
+  `fetch` and `sleep` (for tests).
+- 409 `idempotency_replay_unavailable` is never retried: the first POST with that key worked, but
+  its answer held a one-time secret (a credential create or rotate) that can't be shown again.
+  Read or list the resource (`err.location` names it) instead; rotate again only if you must.
+- Every failure is a `ManagementApiError` with `code`, `message`, `details`, `status`,
+  `retryAfter`, `method`, `path`, `idempotencyKey`, `location` and `requestId`. `ErrorCode`
+  lists the documented codes; a code this SDK does not know yet still arrives as sent. The SDK's
+  own codes are `network_error` (no answer; `status` is `null`), `http_error` (an error answer
+  without the JSON error body) and `invalid_response`.
+- `delete_refused` (credential revoke) is not retried automatically: the credential is already
+  revoked on intake; retry the DELETE yourself.
+
 ## Framework integration
 
 Express is the only framework this SDK integrates with directly (it's an optional peer
@@ -620,6 +774,10 @@ npm install      # install dependencies
 npm test         # run the Jest suite with coverage (jest --coverage)
 ```
 
+The management client's live test (`tests/management/integration.test.js`) is skipped unless
+`EPB_MGMT_BASE_URL` (for example `http://localhost:4000`) and `EPB_MGMT_KEY` (a write-scope
+`epb_mk_...` key) are set; it creates what it uses and removes it again.
+
 `./build.sh` and `./test.sh` wrap the same commands and are what CI (`.github/workflows/ci.yml`)
 runs on every push/PR to `master`. A separate `publish.yml` workflow publishes to npm on GitHub
 Release, once the `NPM_TOKEN` repo secret is configured.
@@ -656,6 +814,12 @@ src/
     request-writer.js, response-writer.js, exception-writer.js, log-writer.js
   tokens/
     access-tokens.js           # Access-token cache, keyed on the base URL intake resolves to
+  management/                  # Management API client (the `end-point-blank-js/management` export)
+    index.js, index.d.ts       # Exports and TypeScript declarations
+    client.js                  # ManagementClient: options, key checks, resources
+    resources.js               # One class per /api/v1 route group, plus pagination
+    transport.js               # fetch, Bearer key, Idempotency-Key, retries
+    errors.js                  # ManagementApiError and ErrorCode
   commands/
     _http.js                   # Shared fetch()-based POST helper (timeout + retry)
     basic-authenticate.js, endpoint-authorize.js, endpoint-update.js
