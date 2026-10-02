@@ -127,10 +127,13 @@ class Transport {
     let response;
     let text;
     try {
-      response = await fetchImpl(url, { ...init, signal: controller.signal });
+      // The API never redirects. 'manual' answers a 3xx as itself (an
+      // http_error), so the Authorization header is never forwarded to
+      // wherever a Location points (older Node 18 fetch did, cross-origin).
+      response = await fetchImpl(url, { ...init, redirect: 'manual', signal: controller.signal });
       text = await response.text();
     } catch (err) {
-      if (!isNetworkError(err)) throw err;
+      if (!isNetworkError(err)) throw this.#scrubbed(err, context);
       // The cause's message comes from the network stack (a host name, an
       // errno), never from a header, so it cannot hold the key.
       const reason = (err.cause && err.cause.code) || err.code || err.name;
@@ -159,6 +162,22 @@ class Transport {
     }
 
     throw errorFromAnswer(status, parsed, text, response, context);
+  }
+
+  /**
+   * What `fetch` threw that was not a network error, safe to hand on. A
+   * `TypeError` is how `fetch` refuses to build a request (a header value it
+   * cannot send), and its message quotes the offending header, which may be
+   * `Authorization`; so it, and anything else that mentions the key, is
+   * replaced by an error that does not. Anything else is thrown as itself.
+   */
+  #scrubbed(err, context) {
+    const text = `${err && err.message} ${err && err.stack}`;
+    if (!(err instanceof TypeError) && !text.includes(this.#apiKey)) return err;
+    return new TypeError(
+      `${context.method} ${context.path} could not be sent: fetch refused to build the request ` +
+        `(${err && err.name}). Its message is withheld because it may quote a header.`
+    );
   }
 
   /** Milliseconds to wait before the next attempt, or `null` to give up. */
@@ -263,9 +282,17 @@ function queryString(query) {
 }
 
 function checkIdempotencyKey(key) {
-  if (typeof key !== 'string' || key.trim() === '' || key.trim().length > MAX_IDEMPOTENCY_KEY_LENGTH) {
+  // Checked as sent: app_portal trims it but counts its length in bytes, and
+  // a control character could not be sent in a header at all.
+  if (
+    typeof key !== 'string' ||
+    key.trim() === '' ||
+    new TextEncoder().encode(key).length > MAX_IDEMPOTENCY_KEY_LENGTH ||
+    /[\x00-\x1f\x7f]/.test(key)
+  ) {
     throw new TypeError(
-      `idempotencyKey must be a non-blank string of at most ${MAX_IDEMPOTENCY_KEY_LENGTH} characters.`
+      `idempotencyKey must be a non-blank string of at most ${MAX_IDEMPOTENCY_KEY_LENGTH} bytes, ` +
+        'with no control characters.'
     );
   }
   return key;

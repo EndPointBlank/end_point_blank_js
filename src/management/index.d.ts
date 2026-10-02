@@ -12,7 +12,7 @@ export type Timestamp = string;
 export interface ManagementClientOptions {
   /** A management API key, `epb_mk_...`. Never a runtime client credential. */
   apiKey: string;
-  /** Default `https://app.endpointblank.com`. Without `/api/v1`. */
+  /** Default `https://app.endpointblank.com`. Without `/api/v1`. Must be https, except for localhost, 127.0.0.1 and [::1]. */
   baseUrl?: string;
   /** Retries after the first attempt (default 2). `0` or `false` turns retrying off. */
   maxRetries?: number | false;
@@ -30,7 +30,7 @@ export interface ManagementClientOptions {
 
 /** Options every POST takes. */
 export interface PostOptions {
-  /** Sent as `Idempotency-Key` (1-255 characters). Generated (UUID v4) when omitted. Reused on every retry. */
+  /** Sent as `Idempotency-Key` (1-255 bytes, no control characters). Generated (UUID v4) when omitted. Reused on every retry. */
   idempotencyKey?: string;
 }
 
@@ -72,6 +72,8 @@ export declare class ManagementClient {
 }
 
 export declare class ManagedClientScope {
+  /** Made by `ManagementClient#forManagedClient`, not directly. */
+  private constructor();
   readonly clientId: Uuid;
   readonly applications: ApplicationsResource;
   readonly environments: EnvironmentsResource;

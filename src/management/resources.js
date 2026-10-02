@@ -17,9 +17,19 @@ const MAX_LIMIT = 100;
 
 const INSPECT = Symbol.for('nodejs.util.inspect.custom');
 
+/**
+ * One path segment for an id. An id made only of dots (`.`, `..`, ...) is
+ * refused: `fetch` resolves `.` and `..` (and `%2e` forms) as dot-segments, so
+ * `clients.grants.revoke('c1', '..')` would otherwise send
+ * `DELETE /clients/c1/` and delete the client, and
+ * `forManagedClient('..')` would act on the caller's own organization.
+ */
 const seg = (value) => {
   if (typeof value !== 'string' || value === '') {
     throw new TypeError(`Expected a non-empty id string, got ${value === '' ? 'an empty string' : typeof value}.`);
+  }
+  if (/^\.+$/.test(value)) {
+    throw new TypeError('An id made only of dots is not an id: it would be sent as a path dot-segment.');
   }
   return encodeURIComponent(value);
 };

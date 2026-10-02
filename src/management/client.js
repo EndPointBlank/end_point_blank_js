@@ -15,6 +15,10 @@ const {
 
 const DEFAULT_BASE_URL = 'https://app.endpointblank.com';
 const KEY_PREFIX = 'epb_mk_';
+const KEY_FORMAT = /^epb_mk_[A-Za-z0-9_-]+$/;
+// Hosts a plain-http baseUrl may name: the key would otherwise cross the
+// network in cleartext.
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 const OPTION_KEYS = Object.freeze([
   'apiKey', 'baseUrl', 'maxRetries', 'maxRetryWaitMs', 'retryBaseDelayMs', 'timeoutMs',
@@ -162,7 +166,10 @@ function checkApiKey(apiKey) {
   }
   // The value is never echoed: a mixed-up runtime secret would otherwise end
   // up in whatever logs the exception.
-  if (!apiKey.startsWith(KEY_PREFIX) || apiKey.length === KEY_PREFIX.length || /\s/.test(apiKey)) {
+  // app_portal mints `epb_mk_` + URL-safe base64 without padding. Anything
+  // else could not be a key, and a character a header cannot carry (NUL, a
+  // newline) would make `fetch` throw an error quoting the whole header.
+  if (!KEY_FORMAT.test(apiKey)) {
     throw new ConfigurationError(
       'ManagementClient apiKey is not a management API key: it must start with ' +
         `"${KEY_PREFIX}". Runtime client credentials (client_id/client_secret) are not ` +
@@ -181,6 +188,12 @@ function checkBaseUrl(baseUrl) {
   }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') {
     throw new ConfigurationError('ManagementClient baseUrl must be an absolute http or https URL.');
+  }
+  if (url.protocol === 'http:' && !LOOPBACK_HOSTS.has(url.hostname)) {
+    throw new ConfigurationError(
+      'ManagementClient baseUrl must be https: the management key would be sent in cleartext. ' +
+        'Plain http is allowed only for localhost, 127.0.0.1 and [::1].'
+    );
   }
   if (url.username || url.password || url.search || url.hash) {
     throw new ConfigurationError(

@@ -25,7 +25,10 @@ function fakeFetch(...answers) {
   const fetch = jest.fn(async (url, init) => {
     const parsed = new URL(url);
     calls.push({
+      // The string exactly as handed to fetch: `path` below has been through
+      // URL parsing, which already resolves dot-segments.
       url,
+      rawPath: url.slice(BASE.length).split('?')[0],
       method: init.method,
       path: parsed.pathname,
       query: Object.fromEntries(parsed.searchParams),
@@ -110,6 +113,48 @@ describe('ManagementClient construction', () => {
   test.each([['epb_mk_'], ['epb_mk_ has space'], [42]])('refuses the malformed key %p', (apiKey) => {
     expect(() => new ManagementClient({ apiKey })).toThrow(ConfigurationError);
   });
+
+  test.each([
+    ['NUL', 'epb_mk_abc\u0000def'],
+    ['newline', 'epb_mk_abc\ndef'],
+    ['control character', 'epb_mk_abc\u0001def'],
+    ['DEL', 'epb_mk_abc\u007fdef'],
+    ['non-ASCII', 'epb_mk_abcédef'],
+    ['= padding', 'epb_mk_abcdef=='],
+    ['+ and / (standard base64)', 'epb_mk_ab+c/def'],
+  ])('refuses a key with %s, without echoing it', (_label, apiKey) => {
+    let error;
+    try {
+      new ManagementClient({ apiKey, baseUrl: BASE });
+    } catch (err) {
+      error = err;
+    }
+    expect(error).toBeInstanceOf(ConfigurationError);
+    for (const view of [error.message, error.stack, util.inspect(error), JSON.stringify(error)]) {
+      expect(view).not.toContain(apiKey);
+      expect(view).not.toContain('abc');
+    }
+  });
+
+  test('accepts a key in the minted alphabet (URL-safe base64, no padding)', () => {
+    expect(() => new ManagementClient({ apiKey: 'epb_mk_AZaz09-_Q8xW', baseUrl: BASE })).not.toThrow();
+  });
+
+  test.each([
+    ['http://localhost:4000'],
+    ['http://127.0.0.1:4000'],
+    ['http://[::1]:4000'],
+    ['https://app.example.test'],
+  ])('allows the base URL %s', (baseUrl) => {
+    expect(() => new ManagementClient({ apiKey: KEY, baseUrl })).not.toThrow();
+  });
+
+  test.each([['http://app.endpointblank.com'], ['http://10.0.0.5:4000'], ['http://localhost.evil.test']])(
+    'refuses plain http to the non-loopback host %s',
+    (baseUrl) => {
+      expect(() => new ManagementClient({ apiKey: KEY, baseUrl })).toThrow(/must be https/);
+    },
+  );
 
   test('refuses an unknown option, such as a runtime clientSecret', () => {
     expect(() => new ManagementClient({ apiKey: KEY, clientSecret: 'x' }))
@@ -267,6 +312,7 @@ describe('every resource method', () => {
     const sent = fetch.calls[0];
     expect(sent.method).toBe(method);
     expect(sent.path).toBe(`/api/v1${path}`);
+    expect(sent.rawPath).toBe(`/api/v1${path}`);
     expect(sent.query).toEqual(query);
     expect(sent.body).toEqual(body);
     if (method === 'POST') {
@@ -320,6 +366,55 @@ describe('every resource method', () => {
     expect(fetch.calls[0].url).toBe(`${BASE}/api/v1/clients/a%2Fb%3Fc`);
   });
 
+  describe('an id made only of dots is refused before any request (dot-segments)', () => {
+    const dots = ['.', '..', '...'];
+    const calls = [
+      ['clients.get', (m, id) => m.clients.get(id)],
+      ['clients.delete', (m, id) => m.clients.delete(id)],
+      ['credentials.revoke', (m, id) => m.credentials.revoke(id)],
+      ['credentials.rotate', (m, id) => m.credentials.rotate(id)],
+      ['apiPackages.update', (m, id) => m.apiPackages.update(id, { name: 'n' })],
+      ['clients.grants.revoke (nested id)', (m, id) => m.clients.grants.revoke('c1', id)],
+      ['clients.grants.revoke (client id)', (m, id) => m.clients.grants.revoke(id, 'g1')],
+      ['clients.packages.remove (nested id)', (m, id) => m.clients.packages.remove('c1', id)],
+      ['clients.packages.remove (client id)', (m, id) => m.clients.packages.remove(id, 'p1')],
+      ['applications.environments.delete (nested id)', (m, id) => m.applications.environments.delete('a1', id)],
+      ['apiPackages.endpoints.remove (nested id)', (m, id) => m.apiPackages.endpoints.remove('p1', id)],
+      ['apiPackages.endpoints.listAll', (m, id) => m.apiPackages.endpoints.listAll(id)],
+      ['forManagedClient(..).credentials.create', (m, id) => m.forManagedClient(id).credentials.create({ application_environment_id: 'ae1' })],
+      ['forManagedClient(..).applications.list', (m, id) => m.forManagedClient(id).applications.list()],
+      ['forManagedClient(ok).credentials.revoke', (m, id) => m.forManagedClient('mc1').credentials.revoke(id)],
+      ['clients.claimInvite', (m, id) => m.clients.claimInvite(id, { email: 'a@b.test' })],
+    ];
+    const rows = calls.flatMap(([label, call]) => dots.map((id) => [label, JSON.stringify(id), call, id]));
+
+    test.each(rows)('%s with %s', async (_label, _shown, call, id) => {
+      const fetch = fakeFetch();
+      const { mgmt } = client(fetch);
+      let outcome;
+      try {
+        outcome = call(mgmt, id);
+        await outcome;
+      } catch (err) {
+        outcome = err;
+      }
+      expect(outcome).toBeInstanceOf(TypeError);
+      expect(outcome.message).toMatch(/only of dots/);
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    test('an id that merely contains dots is sent, encoded, as one segment', async () => {
+      const fetch = fakeFetch(ok({}), ok({}));
+      const { mgmt } = client(fetch);
+      await mgmt.clients.get('v1.2');
+      await mgmt.clients.get('../x');
+      expect(fetch.calls.map((c) => c.url)).toEqual([
+        `${BASE}/api/v1/clients/v1.2`,
+        `${BASE}/api/v1/clients/..%2Fx`,
+      ]);
+    });
+  });
+
   test('a missing id is refused before any request', () => {
     const fetch = fakeFetch();
     const { mgmt } = client(fetch);
@@ -330,38 +425,44 @@ describe('every resource method', () => {
 });
 
 describe('managed clients', () => {
-  // [label, call, method, path]
+  const appBody = { name: 'A', environment_base_urls: { e1: 'https://a.test' } };
+  // [label, call, method, path, body]
   const cases = [
-    ['applications.list', (s) => s.applications.list(), 'GET', '/applications'],
-    ['applications.create', (s) => s.applications.create({ name: 'A', environment_base_urls: { e1: 'https://a.test' } }), 'POST', '/applications'],
-    ['applications.get', (s) => s.applications.get('a1'), 'GET', '/applications/a1'],
-    ['applications.update', (s) => s.applications.update('a1', { name: 'B' }), 'PATCH', '/applications/a1'],
-    ['applications.delete', (s) => s.applications.delete('a1'), 'DELETE', '/applications/a1'],
-    ['applications.environments.list', (s) => s.applications.environments.list('a1'), 'GET', '/applications/a1/environments'],
-    ['applications.environments.create', (s) => s.applications.environments.create('a1', { environment_id: 'e1', base_url: 'https://a.test' }), 'POST', '/applications/a1/environments'],
-    ['applications.environments.delete', (s) => s.applications.environments.delete('a1', 'ae1'), 'DELETE', '/applications/a1/environments/ae1'],
-    ['environments.list', (s) => s.environments.list(), 'GET', '/environments'],
-    ['environments.create', (s) => s.environments.create({ name: 'qa', domain: 'qa.test' }), 'POST', '/environments'],
-    ['environments.get', (s) => s.environments.get('e1'), 'GET', '/environments/e1'],
-    ['environments.update', (s) => s.environments.update('e1', { name: 'qa2' }), 'PATCH', '/environments/e1'],
-    ['environments.delete', (s) => s.environments.delete('e1'), 'DELETE', '/environments/e1'],
-    ['credentials.list', (s) => s.credentials.list(), 'GET', '/credentials'],
-    ['credentials.get', (s) => s.credentials.get('cr1'), 'GET', '/credentials/cr1'],
-    ['credentials.create', (s) => s.credentials.create({ application_environment_id: 'ae1' }), 'POST', '/credentials'],
-    ['credentials.rotate', (s) => s.credentials.rotate('cr1'), 'POST', '/credentials/cr1/rotate'],
-    ['credentials.revoke', (s) => s.credentials.revoke('cr1'), 'DELETE', '/credentials/cr1'],
-    ['claimInvite', (s) => s.claimInvite({ email: 'o@acme.test' }), 'POST', '/claim_invites'],
+    ['applications.list', (s) => s.applications.list(), 'GET', '/applications', undefined],
+    ['applications.create', (s) => s.applications.create(appBody), 'POST', '/applications', appBody],
+    ['applications.get', (s) => s.applications.get('a1'), 'GET', '/applications/a1', undefined],
+    ['applications.update', (s) => s.applications.update('a1', { name: 'B' }), 'PATCH', '/applications/a1', { name: 'B' }],
+    ['applications.delete', (s) => s.applications.delete('a1'), 'DELETE', '/applications/a1', undefined],
+    ['applications.environments.list', (s) => s.applications.environments.list('a1'), 'GET', '/applications/a1/environments', undefined],
+    ['applications.environments.create', (s) => s.applications.environments.create('a1', { environment_id: 'e1', base_url: 'https://a.test' }), 'POST', '/applications/a1/environments', { environment_id: 'e1', base_url: 'https://a.test' }],
+    ['applications.environments.delete', (s) => s.applications.environments.delete('a1', 'ae1'), 'DELETE', '/applications/a1/environments/ae1', undefined],
+    ['environments.list', (s) => s.environments.list(), 'GET', '/environments', undefined],
+    ['environments.create', (s) => s.environments.create({ name: 'qa', domain: 'qa.test' }), 'POST', '/environments', { name: 'qa', domain: 'qa.test' }],
+    ['environments.get', (s) => s.environments.get('e1'), 'GET', '/environments/e1', undefined],
+    ['environments.update', (s) => s.environments.update('e1', { name: 'qa2' }), 'PATCH', '/environments/e1', { name: 'qa2' }],
+    ['environments.delete', (s) => s.environments.delete('e1'), 'DELETE', '/environments/e1', undefined],
+    ['credentials.list', (s) => s.credentials.list(), 'GET', '/credentials', undefined],
+    ['credentials.get', (s) => s.credentials.get('cr1'), 'GET', '/credentials/cr1', undefined],
+    ['credentials.create', (s) => s.credentials.create({ application_environment_id: 'ae1' }), 'POST', '/credentials', { application_environment_id: 'ae1' }],
+    ['credentials.rotate', (s) => s.credentials.rotate('cr1'), 'POST', '/credentials/cr1/rotate', undefined],
+    ['credentials.revoke', (s) => s.credentials.revoke('cr1'), 'DELETE', '/credentials/cr1', undefined],
+    ['claimInvite', (s) => s.claimInvite({ email: 'o@acme.test' }), 'POST', '/claim_invites', { email: 'o@acme.test' }],
   ];
 
-  test.each(cases)('forManagedClient(id).%s is scoped under /clients/:client_id', async (_label, call, method, path) => {
+  test.each(cases)('forManagedClient(id).%s is scoped under /clients/:client_id', async (_label, call, method, path, body) => {
     const fetch = fakeFetch({ status: 200, body: { data: [], next_cursor: null } });
     const { mgmt } = client(fetch);
 
     await call(mgmt.forManagedClient('mc1'));
 
-    expect(fetch.calls[0].method).toBe(method);
-    expect(fetch.calls[0].path).toBe(`/api/v1/clients/mc1${path}`);
-    expect(fetch.calls[0].headers.Authorization).toBe(`Bearer ${KEY}`);
+    const sent = fetch.calls[0];
+    expect(sent.method).toBe(method);
+    expect(sent.rawPath).toBe(`/api/v1/clients/mc1${path}`);
+    expect(sent.path).toBe(`/api/v1/clients/mc1${path}`);
+    expect(sent.body).toEqual(body);
+    expect(sent.headers.Authorization).toBe(`Bearer ${KEY}`);
+    if (method === 'POST') expect(sent.headers['Idempotency-Key']).toMatch(UUID_V4);
+    else expect(sent.headers['Idempotency-Key']).toBeUndefined();
   });
 
   test('the scope keeps its client id', () => {
@@ -483,6 +584,14 @@ describe('idempotency keys', () => {
     expect(first).not.toBe(second);
   });
 
+  test('a caller key of exactly 255 bytes is sent as is', async () => {
+    const fetch = fakeFetch(created({}));
+    const { mgmt } = client(fetch);
+    const key = 'é'.repeat(127) + 'x'; // 254 + 1 bytes
+    await mgmt.apiPackages.create({ name: 'a' }, { idempotencyKey: key });
+    expect(fetch.calls[0].headers['Idempotency-Key']).toBe(key);
+  });
+
   test('the caller can pass one', async () => {
     const fetch = fakeFetch(created({}));
     const { mgmt } = client(fetch);
@@ -513,7 +622,7 @@ describe('idempotency keys', () => {
     expect(fetch.calls.map((c) => c.headers['Idempotency-Key'])).toEqual(['rotate-cr1', 'rotate-cr1']);
   });
 
-  test.each([[''], ['   '], ['x'.repeat(256)], [42]])('refuses the key %p before any request', async (idempotencyKey) => {
+  test.each([[''], ['   '], ['x'.repeat(256)], [' '.repeat(10) + 'x'.repeat(250)], ['é'.repeat(128)], ['a\nb'], ['a\u0000b'], [42]])('refuses the key %p before any request', async (idempotencyKey) => {
     const fetch = fakeFetch();
     const { mgmt } = client(fetch);
     await expect(mgmt.apiPackages.create({ name: 'a' }, { idempotencyKey })).rejects.toThrow(TypeError);
@@ -636,6 +745,39 @@ describe('errors', () => {
     const fetch = fakeFetch(bug);
     const { mgmt } = client(fetch);
     await expect(mgmt.clients.list()).rejects.toBe(bug);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test('a fetch TypeError (a header it cannot send) is rethrown without its message', async () => {
+    const fetch = jest.fn(async (url, init) => {
+      throw new TypeError(`Headers.append: "${init.headers.Authorization}" is an invalid header value.`);
+    });
+    const { mgmt } = client(fetch);
+    const error = await caught(mgmt.organization.get());
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error.message).toMatch(/GET \/api\/v1\/organization could not be sent/);
+    for (const view of [error.message, error.stack, util.inspect(error, { depth: 10 })]) {
+      expect(view).not.toContain(KEY);
+    }
+    expect(error.cause).toBeUndefined();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test('any other error mentioning the key is scrubbed too', async () => {
+    const fetch = jest.fn(async () => {
+      throw new RangeError(`bad ${KEY}`);
+    });
+    const { mgmt } = client(fetch);
+    const error = await caught(mgmt.organization.get());
+    expect(util.inspect(error)).not.toContain(KEY);
+  });
+
+  test('fetch is told not to follow redirects, and a 3xx is an http_error, not retried', async () => {
+    const fetch = fakeFetch({ status: 302, body: '', headers: { location: 'https://elsewhere.test/' } });
+    const { mgmt } = client(fetch);
+    const error = await caught(mgmt.organization.get());
+    expect(fetch.mock.calls[0][1].redirect).toBe('manual');
+    expect(error).toMatchObject({ code: ErrorCode.HTTP_ERROR, status: 302, location: 'https://elsewhere.test/' });
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 

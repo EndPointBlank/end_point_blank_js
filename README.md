@@ -572,6 +572,10 @@ environments, runtime credentials), done from code. It is separate from the runt
   (`src/management/index.d.ts`).
 - The key is held privately: `util.inspect`, `JSON.stringify` and `String()` of the client show
   `epb_mk_[REDACTED]`, and no error carries it. The client logs nothing.
+- `baseUrl` must be `https`; plain `http` is allowed only for `localhost`, `127.0.0.1` and
+  `[::1]`, so the key never crosses a network in cleartext. Redirects are not followed.
+- An id made only of dots (`.`, `..`) is refused with a `TypeError` before any request: it would
+  otherwise be resolved as a path dot-segment and reach a different resource.
 
 ### Quickstart
 

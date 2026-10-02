@@ -28,6 +28,9 @@
     token, only to the management API, and is redacted from `inspect`,
     JSON and errors; runtime credentials are never sent. The runtime entry
     points do not load it. No new dependencies.
+  - `baseUrl` must be https, except for localhost, 127.0.0.1 and [::1];
+    redirects are not followed; an id made only of dots, and a key outside
+    `epb_mk_[A-Za-z0-9_-]+`, are refused before any request.
 
 ## 0.13.0
 
