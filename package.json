@@ -1,6 +1,6 @@
 {
   "name": "end-point-blank-js",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "description": "Node.js and Express SDK for EndPointBlank: authorize service-to-service API calls, report endpoint versions, and see which clients still call deprecated API versions.",
   "homepage": "https://endpointblank.com",
   "repository": {
