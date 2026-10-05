@@ -651,7 +651,7 @@ list resource has `list(params)` (one page), `listAll(params)` (each item) and `
 | `apiPackages` | `list`, `listAll`, `pages`, `create`, `get`, `update`, `delete` |
 | `apiPackages.endpoints` | `list(packageId)`, `listAll`, `pages`, `add(packageId, body)`, `remove(packageId, accessId)` |
 | `endpoints` | `list({ application_id, version })`, `listAll`, `pages` |
-| `clients` | `list`, `listAll`, `pages`, `create` (invite, or `managed: true`), `get`, `delete`, `claimInvite(clientId, { email })` |
+| `clients` | `list`, `listAll`, `pages`, `create` (invite, or `managed: true`), `get`, `delete`, `claimInvite(clientId, { email, return_to })` |
 | `clients.packages` | `list(clientId)`, `listAll`, `pages`, `assign(clientId, body)`, `update(clientId, id, { environment_id })`, `remove(clientId, id)` |
 | `clients.grants` | `list(clientId)`, `listAll`, `pages`, `create(clientId, body)`, `revoke(clientId, id)` |
 | `applications` | `list`, `listAll`, `pages`, `create`, `get`, `update`, `delete` |
@@ -682,7 +682,18 @@ await mgmt.clients.packages.assign(managed.id, { api_package_id: apiPackage.id, 
 
 // Hand it over: the customer claims it by accepting this emailed invite
 await globex.claimInvite({ email: 'owner@globex.example' });
+
+// Or send their browser back to your app once they have claimed it
+await globex.claimInvite({
+  email: 'owner@globex.example',
+  return_to: 'https://app.example.com/onboarding/globex',
+});
 ```
+
+`return_to` is optional and is sent only when you give it. It must equal, byte for byte, a claim
+return URL your organization registered in EndPointBlank; otherwise the call answers 422
+`return_to_not_registered` (`ErrorCode.RETURN_TO_NOT_REGISTERED`). After the customer claims the
+client, EndPointBlank redirects their browser to it.
 
 Once the customer claims it, every `forManagedClient` call for it answers 404 `not_found`.
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`claimInvite` takes an optional `return_to` (sc-1515).**
+  `clients.claimInvite(clientId, { email, return_to })` and
+  `forManagedClient(id).claimInvite({ email, return_to })` send it, and only
+  when given; `ClaimInviteRequest` declares it. After the customer claims the
+  managed client, EndPointBlank redirects their browser to it. It must equal,
+  byte for byte, a claim return URL your organization registered in
+  EndPointBlank; otherwise the call answers 422 `return_to_not_registered`,
+  now `ErrorCode.RETURN_TO_NOT_REGISTERED`.
+
 ## 0.14.0
 
 ### Added

@@ -117,6 +117,7 @@ export declare const ErrorCode: Readonly<{
   CLIENT_NOT_ACCEPTED: 'client_not_accepted';
   CLIENT_ACCEPTED: 'client_accepted';
   CLIENT_NOT_MANAGED: 'client_not_managed';
+  RETURN_TO_NOT_REGISTERED: 'return_to_not_registered';
   ALREADY_A_MEMBER: 'already_a_member';
   MANAGED_CLIENT_HAS_CREDENTIALS: 'managed_client_has_credentials';
   API_PACKAGE_NOT_FOUND: 'api_package_not_found';
@@ -354,6 +355,12 @@ export interface CreateClientRequest {
 
 export interface ClaimInviteRequest {
   email: string;
+  /**
+   * Where EndPointBlank sends the customer's browser after they claim the client. It must equal,
+   * byte for byte, a claim return URL your organization registered in EndPointBlank; otherwise
+   * the call answers 422 `return_to_not_registered`. Left out, nothing is sent.
+   */
+  return_to?: string;
 }
 
 export interface ClaimInvite {

@@ -269,6 +269,7 @@ describe('every resource method', () => {
     ['clients.get', (m) => m.clients.get('c1'), 'GET', '/clients/c1'],
     ['clients.delete', (m) => m.clients.delete('c1'), 'DELETE', '/clients/c1'],
     ['clients.claimInvite', (m) => m.clients.claimInvite('c1', { email: 'owner@acme.test' }), 'POST', '/clients/c1/claim_invites', { email: 'owner@acme.test' }],
+    ['clients.claimInvite with return_to', (m) => m.clients.claimInvite('c1', { email: 'owner@acme.test', return_to: 'https://app.acme.test/welcome' }), 'POST', '/clients/c1/claim_invites', { email: 'owner@acme.test', return_to: 'https://app.acme.test/welcome' }],
     ['clients.packages.list', (m) => m.clients.packages.list('c1'), 'GET', '/clients/c1/packages'],
     ['clients.packages.assign', (m) => m.clients.packages.assign('c1', { api_package_id: 'p1', environment_id: 'e1' }), 'POST', '/clients/c1/packages', { api_package_id: 'p1', environment_id: 'e1' }],
     ['clients.packages.update', (m) => m.clients.packages.update('c1', 'as1', { environment_id: 'e2' }), 'PATCH', '/clients/c1/packages/as1', { environment_id: 'e2' }],
@@ -447,6 +448,7 @@ describe('managed clients', () => {
     ['credentials.rotate', (s) => s.credentials.rotate('cr1'), 'POST', '/credentials/cr1/rotate', undefined],
     ['credentials.revoke', (s) => s.credentials.revoke('cr1'), 'DELETE', '/credentials/cr1', undefined],
     ['claimInvite', (s) => s.claimInvite({ email: 'o@acme.test' }), 'POST', '/claim_invites', { email: 'o@acme.test' }],
+    ['claimInvite with return_to', (s) => s.claimInvite({ email: 'o@acme.test', return_to: 'https://app.acme.test/welcome' }), 'POST', '/claim_invites', { email: 'o@acme.test', return_to: 'https://app.acme.test/welcome' }],
   ];
 
   test.each(cases)('forManagedClient(id).%s is scoped under /clients/:client_id', async (_label, call, method, path, body) => {
@@ -468,6 +470,30 @@ describe('managed clients', () => {
   test('the scope keeps its client id', () => {
     const { mgmt } = client(fakeFetch());
     expect(mgmt.forManagedClient('mc1').clientId).toBe('mc1');
+  });
+});
+
+describe('claim invite return_to (sc-1515)', () => {
+  test('return_to is sent byte for byte when given', async () => {
+    const fetch = fakeFetch(created({ client_id: 'c1', email: 'owner@acme.test' }));
+    const { mgmt } = client(fetch);
+
+    await mgmt.clients.claimInvite('c1', { email: 'owner@acme.test', return_to: 'https://app.acme.test/welcome?step=2' });
+
+    expect(fetch.calls[0].body).toStrictEqual({ email: 'owner@acme.test', return_to: 'https://app.acme.test/welcome?step=2' });
+  });
+
+  test('no return_to key is sent when none is given', async () => {
+    const fetch = fakeFetch(created({ client_id: 'c1', email: 'owner@acme.test' }), created({ client_id: 'mc1', email: 'o@acme.test' }));
+    const { mgmt } = client(fetch);
+
+    await mgmt.clients.claimInvite('c1', { email: 'owner@acme.test' });
+    await mgmt.forManagedClient('mc1').claimInvite({ email: 'o@acme.test', return_to: undefined });
+
+    expect(fetch.calls[0].body).toStrictEqual({ email: 'owner@acme.test' });
+    expect(fetch.calls[0].body).not.toHaveProperty('return_to');
+    expect(fetch.calls[1].body).toStrictEqual({ email: 'o@acme.test' });
+    expect(fetch.calls[1].body).not.toHaveProperty('return_to');
   });
 });
 
@@ -693,6 +719,17 @@ describe('errors', () => {
     const error = await caught(mgmt.clients.create({ name: 'One too many' }));
     expect(error.code).toBe(ErrorCode.PLAN_LIMIT);
     expect(error.status).toBe(402);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test('422 return_to_not_registered (sc-1515)', async () => {
+    const fetch = fakeFetch(apiError(422, 'return_to_not_registered', 'return_to is not a registered claim return URL.'));
+    const { mgmt } = client(fetch);
+    const error = await caught(mgmt.clients.claimInvite('c1', { email: 'owner@acme.test', return_to: 'https://evil.test/' }));
+    expect(ErrorCode.RETURN_TO_NOT_REGISTERED).toBe('return_to_not_registered');
+    expect(error).toBeInstanceOf(ManagementApiError);
+    expect(error.code).toBe(ErrorCode.RETURN_TO_NOT_REGISTERED);
+    expect(error.status).toBe(422);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
