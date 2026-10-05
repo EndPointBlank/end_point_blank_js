@@ -293,7 +293,11 @@ class ClientsResource extends Resource {
     return this._data('DELETE', `/clients/${seg(id)}`);
   }
 
-  /** `POST /clients/:client_id/claim_invites` with `{email}`: invite your customer to claim a managed client. */
+  /**
+   * `POST /clients/:client_id/claim_invites` with `{email}`, and optionally `return_to` (a
+   * registered claim return URL, else 422 `return_to_not_registered`): invite your customer to
+   * claim a managed client.
+   */
   claimInvite(clientId, body, options = {}) {
     return this._data('POST', `/clients/${seg(clientId)}/claim_invites`, { body, idempotencyKey: options.idempotencyKey });
   }

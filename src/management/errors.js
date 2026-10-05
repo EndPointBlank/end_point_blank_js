@@ -60,6 +60,7 @@ const ErrorCode = Object.freeze({
   CLIENT_NOT_ACCEPTED: 'client_not_accepted',
   CLIENT_ACCEPTED: 'client_accepted',
   CLIENT_NOT_MANAGED: 'client_not_managed',
+  RETURN_TO_NOT_REGISTERED: 'return_to_not_registered', // 422: return_to is not a registered claim return URL
   ALREADY_A_MEMBER: 'already_a_member',
   MANAGED_CLIENT_HAS_CREDENTIALS: 'managed_client_has_credentials',
   API_PACKAGE_NOT_FOUND: 'api_package_not_found',
