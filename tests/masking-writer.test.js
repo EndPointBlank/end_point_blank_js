@@ -57,15 +57,15 @@ describe('writer masking integration', () => {
 
   test('the posted record still carries the real wire keys (headers/request/path)', async () => {
     config.maskingRules = [
-      { target: 'request_headers', path: '$.authorization', regex: null, replacement_value: '...' },
+      { target: 'request_headers', path: '$.apikey', regex: null, replacement_value: '...' },
     ];
 
-    await RequestWriter.write(req({ headers: { authorization: 'Bearer x' }, body: {} }));
+    await RequestWriter.write(req({ headers: { apikey: 'x' }, body: {} }));
 
     const payload = sentPayload();
     expect(payload).toHaveProperty('headers');
     expect(payload).toHaveProperty('request');
     expect(payload).toHaveProperty('path');
-    expect(payload.headers.authorization).toBe('...');
+    expect(payload.headers.apikey).toBe('...');
   });
 });

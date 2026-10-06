@@ -527,8 +527,8 @@ epb.configure({
     { target: 'request_body', path: '$..ssn', replacement_value: '***' },
     // Keep first/last 4 of a card number in error messages via backreferences.
     { target: 'error_message', regex: '(\\d{4})-\\d{4}-\\d{4}-(\\d{4})', replacement_value: '$1-****-****-$2' },
-    // Redact the Authorization header from reported requests.
-    { target: 'request_headers', path: '$.authorization', replacement_value: '...' },
+    // Redact a custom API-key header from reported requests.
+    { target: 'request_headers', path: "$['x-api-key']", replacement_value: '...' },
   ],
   // Optional: runs after all rules; last chance to transform the payload.
   maskHook: (payload, recordType) => payload,
@@ -556,6 +556,12 @@ actual outgoing wire payload — `request_body` targets the `request` key, `requ
 `headers`, `response_body` targets `body`, `error_message` targets `message`, and `path` targets
 `path`. `LogWriter` log entries are not affected by masking rules (there is no `log` field
 mapping).
+
+**Credential and cookie headers are never sent.** Before any rule runs, `RequestWriter` drops
+`Authorization`, `Proxy-Authorization` and `Cookie` from the request record, and `ResponseWriter`
+drops `Set-Cookie` from the response record, whatever their letter case. They are left out of the
+record, not masked: they are not in the payload the rules and hook receive. The list is
+`SENSITIVE_HEADERS` in `src/sensitive-headers.js`.
 
 ## Management API
 
@@ -808,6 +814,7 @@ src/
   payload-builder.js           # Builds application-error payloads for intake's error ingest
   log-entry.js                 # LogEntry value object
   masking.js                   # JSONPath + regex masking engine
+  sensitive-headers.js         # SENSITIVE_HEADERS: never sent in a request or response record
   fast-json-truncator.js       # JSON truncation helper
   xml-truncator.js             # XML truncation helper
   string-truncator.js          # String truncation helper

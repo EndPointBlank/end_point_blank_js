@@ -73,6 +73,41 @@ describe('RequestWriter.write', () => {
       expect(sentPayload().headers).toEqual(request.headers);
     });
 
+    test('never sends credentials or cookies, in any letter case (sc-1470)', async () => {
+      // No masking rule is configured: the caller's secret must not reach the
+      // provider's request log just because nobody thought to write one.
+      await RequestWriter.write(req({
+        headers: {
+          authorization: 'Basic Y2xpZW50OnNlY3JldA==',
+          'Proxy-Authorization': 'Bearer proxy-token',
+          COOKIE: 'session=abc',
+          'x-api-version': 'v2',
+        },
+      }));
+
+      expect(sentPayload().headers).toEqual({ 'x-api-version': 'v2' });
+    });
+
+    test('drops the credential headers before a mask hook can see them', async () => {
+      const seen = [];
+      config.maskHook = (payload) => {
+        seen.push({ ...payload.headers });
+        return payload;
+      };
+
+      await RequestWriter.write(req({ headers: { authorization: 'Bearer token', accept: '*/*' } }));
+
+      expect(seen).toEqual([{ accept: '*/*' }]);
+    });
+
+    test('leaves the request\'s own headers alone', async () => {
+      const request = req({ headers: { authorization: 'Bearer token' } });
+
+      await RequestWriter.write(request);
+
+      expect(request.headers.authorization).toBe('Bearer token');
+    });
+
     test('falls back to the URL when the framework exposes no path', async () => {
       const bare = { headers: {}, method: 'GET', url: '/v1/students?q=1' };
 
@@ -236,12 +271,12 @@ describe('RequestWriter.write', () => {
       // The point of masking is that the sensitive value never reaches the
       // network, so this asserts on what was actually posted.
       config.maskingRules = [
-        { target: 'request_headers', path: '$.authorization', replacement_value: '[redacted]' },
+        { target: 'request_headers', path: '$.apikey', replacement_value: '[redacted]' },
       ];
 
-      await RequestWriter.write(req({ headers: { authorization: 'Basic c3VwZXItc2VjcmV0' } }));
+      await RequestWriter.write(req({ headers: { apikey: 'c3VwZXItc2VjcmV0' } }));
 
-      expect(sentPayload().headers.authorization).toBe('[redacted]');
+      expect(sentPayload().headers.apikey).toBe('[redacted]');
     });
   });
 
