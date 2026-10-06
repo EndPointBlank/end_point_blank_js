@@ -8,6 +8,7 @@ const { DirectWriter } = require('./direct-writer');
 const { DelayedWriter } = require('./delayed-writer');
 const { applyMasking } = require('../masking');
 const { resolveBaseUrl } = require('../base-url');
+const { withoutSensitiveHeaders } = require('../sensitive-headers');
 
 /**
  * Sends request payloads to the EndPointBlank API.
@@ -24,6 +25,8 @@ const RequestWriter = {
       if (!req) return;
       const version = VersionFinder.find(req);
       const headers = req.headers ? { ...req.headers } : {};
+      // Credentials and cookies never leave the process (sc-1470).
+      const recordedHeaders = withoutSensitiveHeaders(headers);
       const rawPayload = {
         app_name: config.appName,
         env: config.environment,
@@ -47,7 +50,7 @@ const RequestWriter = {
         // the caller's other services are already using it. The tests under
         // "correlating the record" cover all four terms.
         uuid: RequestStore.getUuid() || headers['x-request-id'] || req.id || randomUUID(),
-        headers,
+        headers: recordedHeaders,
         path: req.path || req.url || null,
         http_method: req.method || null,
         endpoint_version: version,

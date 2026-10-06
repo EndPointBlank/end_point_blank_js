@@ -118,6 +118,19 @@ describe('ResponseWriter', () => {
     expect(sentPayload().data).toEqual({});
   });
 
+  test('never sends Set-Cookie, in any letter case (sc-1470)', async () => {
+    const headers = {
+      'content-type': 'application/json',
+      'set-cookie': ['session=abc; HttpOnly'],
+      'Set-Cookie': 'other=def',
+    };
+
+    await ResponseWriter.write(200, headers, null);
+
+    expect(sentPayload().headers).toEqual({ 'content-type': 'application/json' });
+    expect(headers['set-cookie']).toEqual(['session=abc; HttpOnly']);
+  });
+
   test('returns before sending in delayed mode', async () => {
     // Consistent with the other writers: the `finish` handler must not hold a
     // socket open waiting on a telemetry POST.

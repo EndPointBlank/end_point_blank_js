@@ -6,6 +6,7 @@ const { RoutePatternFinder } = require('../commands/route-pattern-finder');
 const { DirectWriter } = require('./direct-writer');
 const { DelayedWriter } = require('./delayed-writer');
 const { applyMasking } = require('../masking');
+const { withoutSensitiveHeaders } = require('../sensitive-headers');
 
 /**
  * Sends response payloads to the EndPointBlank API.
@@ -59,7 +60,8 @@ const ResponseWriter = {
         // the null case is a caller driving `ResponseWriter.write` by hand.
         uuid: RequestStore.getUuid(),
         status,
-        headers,
+        // `Set-Cookie` never leaves the process (sc-1470).
+        headers: withoutSensitiveHeaders(headers),
         body: _truncate(body),
         sent_at: new Date().toISOString(),
         route,
