@@ -558,10 +558,10 @@ actual outgoing wire payload — `request_body` targets the `request` key, `requ
 mapping).
 
 **Credential and cookie headers are never sent.** Before any rule runs, `RequestWriter` drops
-`Authorization`, `Proxy-Authorization` and `Cookie` from the request record, and
-`ResponseWriter` drops `Set-Cookie` from the response record, whatever their letter case. They
-are left out of the record, not masked, so no rule or `maskHook` is needed for them and none can
-bring them back. The list is `SENSITIVE_HEADERS` in `src/sensitive-headers.js`.
+`Authorization`, `Proxy-Authorization` and `Cookie` from the request record, and `ResponseWriter`
+drops `Set-Cookie` from the response record, whatever their letter case. They are left out of the
+record, not masked: they are not in the payload the rules and hook receive. The list is
+`SENSITIVE_HEADERS` in `src/sensitive-headers.js`.
 
 ## Management API
 

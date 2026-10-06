@@ -10,12 +10,18 @@
   for it, a caller's `Authorization` header (Basic `client_id:secret` or a
   bearer token) landed in your request log there. `RequestWriter` now drops
   `Authorization`, `Proxy-Authorization` and `Cookie`, and `ResponseWriter`
-  drops `Set-Cookie`, in any letter case, before masking runs: they are not
-  sent at all. The list is `SENSITIVE_HEADERS` in `src/sensitive-headers.js`.
-  A masking rule that targeted one of these headers now has nothing to match
-  and can be removed. Records sent by earlier versions may hold these values;
-  rotate any client secret a caller sent while it was in use.
+  drops `Set-Cookie`, in any letter case, before masking runs, so they are not
+  in the payload the rules and hook receive, and they are not sent at all. The
+  list is `SENSITIVE_HEADERS`, from
+  `require('end-point-blank-js/src/sensitive-headers')`. A masking rule that
+  targeted one of these headers now has nothing to match and can be removed.
+  Records sent by earlier versions may hold these values; rotate any client
+  secret a caller sent while it was in use.
 
+### Upgrading
+
+- A `maskHook` that reads `Authorization`, `Proxy-Authorization`, `Cookie` or
+  `Set-Cookie` from `headers` now finds it absent; guard the lookup.
 
 ### Added
 
