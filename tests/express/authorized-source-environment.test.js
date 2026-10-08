@@ -104,22 +104,22 @@ function get(port, path, headers = {}) {
   });
 }
 
+// What each /books request saw in the store, for the sc-1571 test.
+const seenByRoute = [];
+
 function buildApp() {
   const app = express();
 
   app.use(reportInteraction);
 
   app.get('/books', authorized, (req, res) => {
-    // Not awaited, as an application would write it.
-    LogWriter.info('listing books');
-    res.status(200).json({ books: [] });
-  });
-
-  app.get('/whoami', authorized, (req, res) => {
-    res.status(200).json({
+    seenByRoute.push({
       source_application_environment_id: RequestStore.getSourceApplicationEnvironmentId(),
       source_organization_id: RequestStore.getSourceOrganizationId(),
     });
+    // Not awaited, as an application would write it.
+    LogWriter.info('listing books');
+    res.status(200).json({ books: [] });
   });
 
   app.get('/errors', authorized, () => {
@@ -202,18 +202,19 @@ describe('authorized — the caller\'s source environment reaches the rows its r
   });
 
   test('the route sees the calling organization beside it (sc-1571)', async () => {
-    const first = await get(appPort, '/whoami', { authorization: 'Basic YWxpY2U=' });
+    seenByRoute.length = 0;
+    const first = await get(appPort, '/books', { authorization: 'Basic YWxpY2U=' });
     // The second is answered from the authorization cache.
-    const second = await get(appPort, '/whoami', { authorization: 'Basic YWxpY2U=' });
+    const second = await get(appPort, '/books', { authorization: 'Basic YWxpY2U=' });
 
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
     expect(authorizeCalls()).toHaveLength(1);
-    for (const response of [first, second]) {
-      expect(response.status).toBe(200);
-      expect(JSON.parse(response.body)).toEqual({
-        source_application_environment_id: 'env-for-Basic YWxpY2U=',
-        source_organization_id: 'org-for-Basic YWxpY2U=',
-      });
-    }
+    const expected = {
+      source_application_environment_id: 'env-for-Basic YWxpY2U=',
+      source_organization_id: 'org-for-Basic YWxpY2U=',
+    };
+    expect(seenByRoute).toEqual([expected, expected]);
   });
 
   test('the error row names the caller', async () => {
