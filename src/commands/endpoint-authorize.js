@@ -15,6 +15,9 @@ const log = require('../log');
  * Successful results are cached keyed on (client_auth, path, method, appName).
  * Cache hits skip the network call and return a synthetic 201 response.
  *
+ * On success the caller's source application environment id and source
+ * organization id are in `RequestStore`.
+ *
  * Equivalent to the Ruby gem's `EndPointBlank::Commands::EndpointAuthorize`.
  */
 const EndpointAuthorize = {
@@ -25,6 +28,12 @@ const EndpointAuthorize = {
    * @returns {Promise<Response|null>}
    */
   async authorize(req, path, version) {
+    // A context that serves more than one authorization (a reused worker, a
+    // route guarded twice) must not carry the last caller's identity into this
+    // one: a refused or failed authorization leaves both unset rather than
+    // naming whoever was authorized before (sc-1571).
+    putSource(null, null);
+
     const clientAuth = req.headers?.authorization ?? '';
     const method = req.method;
     // The version is part of the key because authorization is decided per
@@ -33,8 +42,8 @@ const EndpointAuthorize = {
     const cacheKey = `epb_auth:${clientAuth}:${path}:${method}:${config.appName}:${version}`;
 
     // A hit replays everything the grant said about this call: the caller's
-    // source environment and the deprecation block, either of which may be
-    // null. Authorization is cached per client+route, so anything a hit left
+    // source environment and organization and the deprecation block, any of
+    // which may be null. Authorization is cached per client+route, so anything a hit left
     // out would reach cache misses only — roughly one request in N. That is how
     // the Deprecation and Sunset headers once read as a flaky feature, and the
     // source environment would have gone the same way had only misses recorded
@@ -42,10 +51,12 @@ const EndpointAuthorize = {
     //
     // The entry is always an object, so the cache (which declines falsy values)
     // always stores it, and one `retrieve` both finds and reads it — there is
-    // no separate `exists` check for an expiry to land between.
+    // no separate `exists` check for an expiry to land between. An entry
+    // written before 0.15.0 has no `sourceOrganizationId`; it still
+    // authorizes, with no organization.
     const cached = authCache.retrieve(cacheKey);
     if (cached) {
-      RequestStore.setSourceApplicationEnvironmentId(cached.sourceApplicationEnvironmentId);
+      putSource(cached.sourceApplicationEnvironmentId, cached.sourceOrganizationId ?? null);
       RequestStore.setDeprecation(cached.deprecation);
       return { status: 201, ok: true };
     }
@@ -80,7 +91,7 @@ const EndpointAuthorize = {
       // — so parsing it later in the middleware would leave the caller with a
       // drained stream.
       const grant = await grantFrom(response);
-      RequestStore.setSourceApplicationEnvironmentId(grant.sourceApplicationEnvironmentId);
+      putSource(grant.sourceApplicationEnvironmentId, grant.sourceOrganizationId);
       RequestStore.setDeprecation(grant.deprecation);
       authCache.store(cacheKey, grant);
     } else if (response.status > 299) {
@@ -115,6 +126,11 @@ const EndpointAuthorize = {
  * outage of legitimate traffic. But it is logged, once per cache miss, rather
  * than recorded as null in silence.
  *
+ * `data[0].source_organization_id` is the calling organization's EndPointBlank
+ * id (sc-1571). An intake older than the field does not send it, and an
+ * organization with no id there gets null; both are null here, silently, since
+ * neither is a broken contract.
+ *
  * The `deprecation` block is present only when the version being called is
  * deprecated. Absent, malformed, or unparseable all mean the same thing for
  * it: nothing to say.
@@ -123,7 +139,7 @@ const EndpointAuthorize = {
  * `authorized.js` reads it on the failure path.
  *
  * @param {Response} response
- * @returns {Promise<{sourceApplicationEnvironmentId: string|null, deprecation: object|null}>}
+ * @returns {Promise<{sourceApplicationEnvironmentId: string|null, sourceOrganizationId: string|null, deprecation: object|null}>}
  */
 async function grantFrom(response) {
   let body = null;
@@ -147,7 +163,15 @@ async function grantFrom(response) {
     );
   }
 
-  return { sourceApplicationEnvironmentId, deprecation: body?.deprecation ?? null };
+  const organizationId = body?.data?.[0]?.source_organization_id;
+  const sourceOrganizationId = typeof organizationId === 'string' && organizationId !== '' ? organizationId : null;
+
+  return { sourceApplicationEnvironmentId, sourceOrganizationId, deprecation: body?.deprecation ?? null };
+}
+
+function putSource(sourceApplicationEnvironmentId, sourceOrganizationId) {
+  RequestStore.setSourceApplicationEnvironmentId(sourceApplicationEnvironmentId);
+  RequestStore.setSourceOrganizationId(sourceOrganizationId);
 }
 
 function remoteAddr(req) {

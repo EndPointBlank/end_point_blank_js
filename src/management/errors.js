@@ -53,25 +53,34 @@ const ErrorCode = Object.freeze({
   INTAKE_UNAVAILABLE: 'intake_unavailable', // 503: retryable
 
   // Clients, packages and grants
-  INVALID_CONTACTS: 'invalid_contacts',
-  INVALID_PACKAGES: 'invalid_packages',
-  INVALID_GRANTS: 'invalid_grants',
-  INVALID_MANAGED: 'invalid_managed',
-  CLIENT_NOT_ACCEPTED: 'client_not_accepted',
-  CLIENT_ACCEPTED: 'client_accepted',
-  CLIENT_NOT_MANAGED: 'client_not_managed',
-  RETURN_TO_NOT_REGISTERED: 'return_to_not_registered', // 422: return_to is not a registered claim return URL
-  ALREADY_A_MEMBER: 'already_a_member',
-  MANAGED_CLIENT_HAS_CREDENTIALS: 'managed_client_has_credentials',
-  API_PACKAGE_NOT_FOUND: 'api_package_not_found',
-  ENVIRONMENT_NOT_FOUND: 'environment_not_found',
-  ALREADY_ASSIGNED: 'already_assigned',
-  NOTHING_PUBLISHED_IN_ENVIRONMENT: 'nothing_published_in_environment',
-  APPLICATION_NOT_FOUND: 'application_not_found',
-  ENDPOINT_NOT_FOUND: 'endpoint_not_found',
-  ENVIRONMENT_NOT_IN_APPLICATION: 'environment_not_in_application',
-  ALREADY_GRANTED: 'already_granted',
+  INVALID_CONTACTS: 'invalid_contacts', // 422
+  INVALID_PACKAGES: 'invalid_packages', // 422
+  INVALID_GRANTS: 'invalid_grants', // 422
+  INVALID_MANAGED: 'invalid_managed', // 422
+  CLIENT_NOT_ACCEPTED: 'client_not_accepted', // 422
+  CLIENT_ACCEPTED: 'client_accepted', // 422
+  CLIENT_NOT_MANAGED: 'client_not_managed', // 422: not a managed client, or already claimed
+  ALREADY_A_MEMBER: 'already_a_member', // 422
+  ALREADY_INVITED: 'already_invited', // 409
+  INVITE_ACCEPTED: 'invite_accepted', // 422
+  INVITE_NOT_OPEN: 'invite_not_open', // 422
+  INVITE_RATE_LIMITED: 'invite_rate_limited', // 429
+  NOT_AN_EMAIL_INVITE: 'not_an_email_invite', // 422
+  CLIENT_BEING_REMOVED: 'client_being_removed', // 422
+  CLIENT_NOT_REMOVABLE: 'client_not_removable', // 422
+  MANAGED_CLIENT_HAS_CREDENTIALS: 'managed_client_has_credentials', // 422
+  API_PACKAGE_NOT_FOUND: 'api_package_not_found', // 422
+  ENVIRONMENT_NOT_FOUND: 'environment_not_found', // 422
+  ALREADY_ASSIGNED: 'already_assigned', // 422
+  NOTHING_PUBLISHED_IN_ENVIRONMENT: 'nothing_published_in_environment', // 422
+  APPLICATION_NOT_FOUND: 'application_not_found', // 422
+  ENDPOINT_NOT_FOUND: 'endpoint_not_found', // 422
+  ENVIRONMENT_NOT_IN_APPLICATION: 'environment_not_in_application', // 422
+  ALREADY_GRANTED: 'already_granted', // 422
   GRANT_REVOKED_CONCURRENTLY: 'grant_revoked_concurrently', // 409
+  RETURN_TO_NOT_REGISTERED: 'return_to_not_registered', // 422: return_to is not a registered claim return URL
+  RETURN_URL_NOT_REGISTERED: 'return_url_not_registered', // 422: a portal session's return_url is not one
+  OWNER_EMAIL_MISSING: 'owner_email_missing', // 422: set one with clients.update
 
   // Reported by this SDK, never by the server
   NETWORK_ERROR: 'network_error', // the request never completed (status null)

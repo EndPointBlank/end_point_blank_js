@@ -79,6 +79,7 @@ export declare class ManagedClientScope {
   readonly environments: EnvironmentsResource;
   readonly credentials: CredentialsResource;
   claimInvite(body: ClaimInviteRequest, options?: PostOptions): Promise<ClaimInvite>;
+  createPortalSession(body?: PortalSessionRequest, options?: PostOptions): Promise<PortalSession>;
 }
 
 // --- Errors -------------------------------------------------------------------
@@ -117,8 +118,14 @@ export declare const ErrorCode: Readonly<{
   CLIENT_NOT_ACCEPTED: 'client_not_accepted';
   CLIENT_ACCEPTED: 'client_accepted';
   CLIENT_NOT_MANAGED: 'client_not_managed';
-  RETURN_TO_NOT_REGISTERED: 'return_to_not_registered';
   ALREADY_A_MEMBER: 'already_a_member';
+  ALREADY_INVITED: 'already_invited';
+  INVITE_ACCEPTED: 'invite_accepted';
+  INVITE_NOT_OPEN: 'invite_not_open';
+  INVITE_RATE_LIMITED: 'invite_rate_limited';
+  NOT_AN_EMAIL_INVITE: 'not_an_email_invite';
+  CLIENT_BEING_REMOVED: 'client_being_removed';
+  CLIENT_NOT_REMOVABLE: 'client_not_removable';
   MANAGED_CLIENT_HAS_CREDENTIALS: 'managed_client_has_credentials';
   API_PACKAGE_NOT_FOUND: 'api_package_not_found';
   ENVIRONMENT_NOT_FOUND: 'environment_not_found';
@@ -129,6 +136,9 @@ export declare const ErrorCode: Readonly<{
   ENVIRONMENT_NOT_IN_APPLICATION: 'environment_not_in_application';
   ALREADY_GRANTED: 'already_granted';
   GRANT_REVOKED_CONCURRENTLY: 'grant_revoked_concurrently';
+  RETURN_TO_NOT_REGISTERED: 'return_to_not_registered';
+  RETURN_URL_NOT_REGISTERED: 'return_url_not_registered';
+  OWNER_EMAIL_MISSING: 'owner_email_missing';
   NETWORK_ERROR: 'network_error';
   HTTP_ERROR: 'http_error';
   INVALID_RESPONSE: 'invalid_response';
@@ -351,6 +361,16 @@ export interface CreateClientRequest {
   packages?: PackageAssignmentRequest[];
   /** Granted when the client accepts. Not with `managed: true`. */
   grants?: GrantRequest[];
+  /**
+   * With `managed: true`, the email address of the person at your customer who will own the
+   * managed client (sc-1567). Change it later with `ClientsResource#update`.
+   */
+  owner_email?: string;
+}
+
+export interface UpdateClientRequest {
+  /** The email address of the person at your customer who will own a managed client. */
+  owner_email?: string;
 }
 
 export interface ClaimInviteRequest {
@@ -368,6 +388,25 @@ export interface ClaimInvite {
   email: string;
   sent_at: Timestamp;
   expires_at: Timestamp;
+}
+
+export interface PortalSessionRequest {
+  /**
+   * Where the portal links back to. It must equal, byte for byte, a claim return URL your
+   * organization registered in EndPointBlank; otherwise the call answers 422
+   * `return_url_not_registered`. Left out (or `null`), no body is sent.
+   */
+  return_url?: string | null;
+}
+
+/** A single-use portal sign-in link for a managed client's owner, valid for 60 seconds. */
+export interface PortalSession {
+  client_id: Uuid;
+  /** Redirect the owner's browser to it; never render it into a page, log it or email it. */
+  url: string;
+  expires_at: Timestamp;
+  /** `null` when none was given. */
+  return_url: string | null;
 }
 
 export interface GrantRevoked extends Deleted {
@@ -400,8 +439,12 @@ export declare class ClientsResource {
   pages(params?: PageParams): AsyncGenerator<Page<Client>, void, undefined>;
   create(body: CreateClientRequest, options?: PostOptions): Promise<Client>;
   get(id: Uuid): Promise<Client>;
+  /** `PATCH /clients/:id`. Never retried after it may have reached the server. */
+  update(id: Uuid, body: UpdateClientRequest): Promise<Client>;
   delete(id: Uuid): Promise<Deleted>;
   claimInvite(clientId: Uuid, body: ClaimInviteRequest, options?: PostOptions): Promise<ClaimInvite>;
+  /** Each call sends a new Idempotency-Key unless you pass one; never reuse one across clicks. */
+  createPortalSession(clientId: Uuid, body?: PortalSessionRequest, options?: PostOptions): Promise<PortalSession>;
 }
 
 // --- Applications, environments ---------------------------------------------------

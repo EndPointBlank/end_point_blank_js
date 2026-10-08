@@ -6,6 +6,7 @@ const express = require('express');
 const { instance: config } = require('../../src/configuration');
 const { instance: authCache } = require('../../src/commands/authentication-cache');
 const { authorized } = require('../../src/express');
+const { RequestStore } = require('../../src/request-store');
 const { LogWriter } = require('../../src/writers/log-writer');
 const {
   reportInteraction,
@@ -41,8 +42,9 @@ const realFetch = globalThis.fetch;
 
 /**
  * Intake's 201 body for a granted authorize (`AuthorizationJSON.show/1`): the
- * grant under `data`, with exactly these four keys. The stub names each caller's
- * environment after its credential, so a row that carries the wrong caller's id
+ * grant under `data`, with these four keys and, since sc-1571,
+ * `source_organization_id`. The stub names each caller's environment and
+ * organization after its credential, so a row that carries the wrong caller's id
  * is told apart from one that carries the right one.
  */
 const grantFor = clientAuth => ({
@@ -52,6 +54,7 @@ const grantFor = clientAuth => ({
       id: '11111111-1111-4111-8111-111111111111',
       source_application_environment_id: `env-for-${clientAuth}`,
       target_application_environment_id: '33333333-3333-4333-8333-333333333333',
+      source_organization_id: `org-for-${clientAuth}`,
       inserted_at: '2026-09-10T00:00:00Z',
     },
   ],
@@ -101,12 +104,19 @@ function get(port, path, headers = {}) {
   });
 }
 
+// What each /books request saw in the store, for the sc-1571 test.
+const seenByRoute = [];
+
 function buildApp() {
   const app = express();
 
   app.use(reportInteraction);
 
   app.get('/books', authorized, (req, res) => {
+    seenByRoute.push({
+      source_application_environment_id: RequestStore.getSourceApplicationEnvironmentId(),
+      source_organization_id: RequestStore.getSourceOrganizationId(),
+    });
     // Not awaited, as an application would write it.
     LogWriter.info('listing books');
     res.status(200).json({ books: [] });
@@ -189,6 +199,22 @@ describe('authorized — the caller\'s source environment reaches the rows its r
     const [logRow] = rowsTo('application_logs');
     expect(responseRow.source_application_environment_id).toBe('env-for-Basic YWxpY2U=');
     expect(logRow.source_application_environment_id).toBe('env-for-Basic YWxpY2U=');
+  });
+
+  test('the route sees the calling organization beside it (sc-1571)', async () => {
+    seenByRoute.length = 0;
+    const first = await get(appPort, '/books', { authorization: 'Basic YWxpY2U=' });
+    // The second is answered from the authorization cache.
+    const second = await get(appPort, '/books', { authorization: 'Basic YWxpY2U=' });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(authorizeCalls()).toHaveLength(1);
+    const expected = {
+      source_application_environment_id: 'env-for-Basic YWxpY2U=',
+      source_organization_id: 'org-for-Basic YWxpY2U=',
+    };
+    expect(seenByRoute).toEqual([expected, expected]);
   });
 
   test('the error row names the caller', async () => {

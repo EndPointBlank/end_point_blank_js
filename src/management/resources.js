@@ -280,6 +280,8 @@ class ClientsResource extends Resource {
    * `POST /clients`: invite a client (`name`, optional `contacts`, and
    * `packages`/`grants` to apply when it accepts), or with `managed: true`
    * create a managed client run by you until your customer claims it.
+   * `owner_email` (with `managed: true`, optional) names the person at your
+   * customer who will own it; change it later with `update`.
    */
   create(body, options = {}) {
     return this._data('POST', '/clients', { body, idempotencyKey: options.idempotencyKey });
@@ -287,6 +289,11 @@ class ClientsResource extends Resource {
 
   get(id) {
     return this._data('GET', `/clients/${seg(id)}`);
+  }
+
+  /** `PATCH /clients/:id` with `{owner_email}`: the person at your customer who will own a managed client. */
+  update(id, body) {
+    return this._data('PATCH', `/clients/${seg(id)}`, { body });
   }
 
   delete(id) {
@@ -300,6 +307,23 @@ class ClientsResource extends Resource {
    */
   claimInvite(clientId, body, options = {}) {
     return this._data('POST', `/clients/${seg(clientId)}/claim_invites`, { body, idempotencyKey: options.idempotencyKey });
+  }
+
+  /**
+   * `POST /clients/:client_id/portal_sessions`, with `{return_url}` only when one is given: a
+   * single-use link that signs the owner of an unclaimed managed client in to its EndPointBlank
+   * portal. Answers `{client_id, url, expires_at, return_url}`.
+   *
+   * The link expires 60 seconds after it is minted and works once, so mint it when the user
+   * clicks and redirect their browser to it; never render it into a page, log it or email it.
+   * `return_url` must equal, byte for byte, one of your organization's claim return URLs (else
+   * 422 `return_url_not_registered`). The answer is never replayed, so each call sends a new
+   * Idempotency-Key unless you pass one, and a reused key answers 409
+   * `idempotency_replay_unavailable`: never reuse one across clicks.
+   */
+  createPortalSession(clientId, { return_url } = {}, options = {}) {
+    const body = return_url === undefined || return_url === null ? undefined : { return_url };
+    return this._data('POST', `/clients/${seg(clientId)}/portal_sessions`, { body, idempotencyKey: options.idempotencyKey });
   }
 }
 
@@ -456,6 +480,11 @@ class ManagedClientScope {
   /** `POST /clients/:client_id/claim_invites` for this client. */
   claimInvite(body, options = {}) {
     return this._clients.claimInvite(this.clientId, body, options);
+  }
+
+  /** `POST /clients/:client_id/portal_sessions` for this client: see `ClientsResource#createPortalSession`. */
+  createPortalSession(body = {}, options = {}) {
+    return this._clients.createPortalSession(this.clientId, body, options);
   }
 }
 

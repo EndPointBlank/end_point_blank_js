@@ -93,6 +93,39 @@ describe('reportInteraction', () => {
     await flush();
   });
 
+  test('starts each request from an empty store, whatever context it arrives in', async () => {
+    // A request that arrives inside an earlier one's async chain (a reused
+    // worker, a nested app) must not lend that request's caller to this one.
+    let seen;
+
+    await RequestStore.run(makeReq({ url: '/earlier' }), async () => {
+      RequestStore.setSourceApplicationEnvironmentId('env-stale');
+      RequestStore.setSourceOrganizationId('org-stale');
+      RequestStore.setDeprecation({ deprecated_at: '2026-01-01T00:00:00Z' });
+      const earlierUuid = RequestStore.getUuid();
+
+      await new Promise(resolve => {
+        reportInteraction(makeReq(), makeRes(), () => {
+          seen = {
+            env: RequestStore.getSourceApplicationEnvironmentId(),
+            organization: RequestStore.getSourceOrganizationId(),
+            deprecation: RequestStore.getDeprecation(),
+            uuid: RequestStore.getUuid(),
+            earlierUuid,
+          };
+          resolve();
+        });
+      });
+    });
+
+    expect(seen.env).toBeNull();
+    expect(seen.organization).toBeNull();
+    expect(seen.deprecation).toBeNull();
+    expect(typeof seen.uuid).toBe('string');
+    expect(seen.uuid).not.toBe(seen.earlierUuid);
+    await flush();
+  });
+
   test('reports the request to the requests endpoint', async () => {
     reportInteraction(makeReq({ method: 'POST' }), makeRes(), () => {});
     await flush();
