@@ -657,7 +657,7 @@ list resource has `list(params)` (one page), `listAll(params)` (each item) and `
 | `apiPackages` | `list`, `listAll`, `pages`, `create`, `get`, `update`, `delete` |
 | `apiPackages.endpoints` | `list(packageId)`, `listAll`, `pages`, `add(packageId, body)`, `remove(packageId, accessId)` |
 | `endpoints` | `list({ application_id, version })`, `listAll`, `pages` |
-| `clients` | `list`, `listAll`, `pages`, `create` (invite, or `managed: true`), `get`, `delete`, `claimInvite(clientId, { email, return_to })` |
+| `clients` | `list`, `listAll`, `pages`, `create` (invite, or `managed: true`), `get`, `update(id, { owner_email })`, `delete`, `claimInvite(clientId, { email, return_to })`, `createPortalSession(clientId, { return_url })` |
 | `clients.packages` | `list(clientId)`, `listAll`, `pages`, `assign(clientId, body)`, `update(clientId, id, { environment_id })`, `remove(clientId, id)` |
 | `clients.grants` | `list(clientId)`, `listAll`, `pages`, `create(clientId, body)`, `revoke(clientId, id)` |
 | `applications` | `list`, `listAll`, `pages`, `create`, `get`, `update`, `delete` |
@@ -672,7 +672,13 @@ it. `forManagedClient(id)` gives the same `applications`, `environments` and `cr
 made under `/clients/:client_id/...` for that client:
 
 ```js
-const managed = await mgmt.clients.create({ name: 'Globex', managed: true });
+// `owner_email` (optional) names the person at your customer who will own it;
+// change it later with `mgmt.clients.update(managed.id, { owner_email })`.
+const managed = await mgmt.clients.create({
+  name: 'Globex',
+  managed: true,
+  owner_email: 'owner@globex.example',
+});
 const globex = mgmt.forManagedClient(managed.id);
 
 const env = await globex.environments.create({ name: 'production-eu', domain: 'eu.globex.example' });
@@ -694,12 +700,30 @@ await globex.claimInvite({
   email: 'owner@globex.example',
   return_to: 'https://app.example.com/onboarding/globex',
 });
+
+// Until they claim it, send its owner into its EndPointBlank portal from your
+// app: mint a link when they click and redirect their browser to it. The link
+// works once and expires after 60 seconds, so never render it into a page, and
+// mint a new one (with a new Idempotency-Key, the default) on every click.
+// `return_url` (optional) must be one of your claim return URLs too.
+const { url } = await globex.createPortalSession({
+  return_url: 'https://app.example.com/onboarding/globex',
+});
+// e.g. in an Express handler: res.redirect(303, url);
 ```
 
 `return_to` is optional and is sent only when you give it. It must equal, byte for byte, a claim
 return URL your organization registered in EndPointBlank; otherwise the call answers 422
 `return_to_not_registered` (`ErrorCode.RETURN_TO_NOT_REGISTERED`). After the customer claims the
 client, EndPointBlank redirects their browser to it.
+
+`createPortalSession` answers `{ client_id, url, expires_at, return_url }` (`return_url` is
+`null` when none was given), and sends a body only when you give `return_url`. It is refused with
+404 `not_found` for a client that is not yours, and 422 `client_not_managed` (not a managed
+client, or already claimed), `client_being_removed`, `owner_email_missing` (set one with
+`clients.update`) or `return_url_not_registered`. Its answer is never replayed: a reused
+Idempotency-Key answers 409 `idempotency_replay_unavailable`, so never pass the same
+`idempotencyKey` for two clicks.
 
 Once the customer claims it, every `forManagedClient` call for it answers 404 `not_found`.
 
@@ -717,8 +741,9 @@ Once the customer claims it, every `forManagedClient` call for it answers 404 `n
   Other options: `timeoutMs` per attempt (default 30000), `retryBaseDelayMs` (default 500),
   `fetch` and `sleep` (for tests).
 - 409 `idempotency_replay_unavailable` is never retried: the first POST with that key worked, but
-  its answer held a one-time secret (a credential create or rotate) that can't be shown again.
-  Read or list the resource (`err.location` names it) instead; rotate again only if you must.
+  its answer held a one-time secret (a credential create or rotate, or a portal session's link)
+  that can't be shown again. Read or list the resource (`err.location` names it) instead; rotate
+  again only if you must. For a portal session, create a new one with a new key.
 - Every failure is a `ManagementApiError` with `code`, `message`, `details`, `status`,
   `retryAfter`, `method`, `path`, `idempotencyKey`, `location` and `requestId`. `ErrorCode`
   lists the documented codes; a code this SDK does not know yet still arrives as sent. The SDK's

@@ -5,7 +5,8 @@ const { randomUUID } = require('crypto');
 
 /**
  * Async-context-local store for the current request object and associated
- * per-request data (such as `sourceApplicationEnvironmentId`).
+ * per-request data (such as `sourceApplicationEnvironmentId` and
+ * `sourceOrganizationId`).
  *
  * Uses Node.js `AsyncLocalStorage` so the stored request is automatically
  * scoped to the current async call chain — the JavaScript equivalent of
@@ -27,7 +28,13 @@ const RequestStore = {
    * @returns {Promise<*>}
    */
   run(request, fn) {
-    return storage.run({ request, sourceEnvId: null, deprecation: null, uuid: randomUUID() }, fn);
+    // A fresh context every time, never the one already in force: a request
+    // that arrives inside another's async chain (a reused worker, a nested
+    // `run`) must not lend that request's caller to this one.
+    return storage.run(
+      { request, sourceEnvId: null, sourceOrganizationId: null, deprecation: null, uuid: randomUUID() },
+      fn,
+    );
   },
 
   /**
@@ -61,6 +68,33 @@ const RequestStore = {
   getSourceApplicationEnvironmentId() {
     const ctx = storage.getStore();
     return ctx ? ctx.sourceEnvId : null;
+  },
+
+  /**
+   * Stores the calling organization's EndPointBlank id for the current async
+   * context, from intake's `/authorize` answer
+   * (`data[0].source_organization_id`, sc-1571).
+   *
+   * Set by `EndpointAuthorize` beside the source application environment id,
+   * on a cache hit as well as a miss.
+   *
+   * @param {string|null} id
+   */
+  setSourceOrganizationId(id) {
+    const ctx = storage.getStore();
+    if (ctx) ctx.sourceOrganizationId = id;
+  },
+
+  /**
+   * Returns the calling organization's EndPointBlank id for the current async
+   * context. `null` when intake is older than that field, the organization
+   * has no id there, or the request was not authorized.
+   *
+   * @returns {string|null}
+   */
+  getSourceOrganizationId() {
+    const ctx = storage.getStore();
+    return ctx ? ctx.sourceOrganizationId : null;
   },
 
   /**

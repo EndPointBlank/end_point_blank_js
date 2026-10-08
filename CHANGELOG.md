@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.15.0
+
+### Added
+
+- **Managed clients carry an `owner_email` (sc-1567).** `clients.create` with
+  `managed: true` documents and passes through `owner_email`, the person at
+  your customer who will own the managed client (`CreateClientRequest`
+  declares it), and the new `clients.update(id, { owner_email })`
+  (`PATCH /api/v1/clients/:id`) changes it. Like every PATCH, it sends no
+  `Idempotency-Key` and is never retried after a 5xx or a lost connection.
+- **The calling organization's id is kept from `/authorize` (sc-1571).**
+  `RequestStore.getSourceOrganizationId()` returns
+  `data[0].source_organization_id`, the caller's EndPointBlank organization
+  id, beside `getSourceApplicationEnvironmentId()`. It is cached with the
+  source environment id, so a cache hit has it too. `null` when intake is
+  older than the field or the organization has no id, without a log line:
+  neither is a broken contract. That `null` is cached like the id would be:
+  after intake starts sending the field, a cached client and route keeps
+  answering `null` until its entry expires (`cacheTtl`, 300 s by default).
+  An entry cached by 0.14.x, with no organization, still authorizes.
+- **`clients.createPortalSession(clientId, { return_url })` signs a managed
+  client's owner in to its EndPointBlank portal (sc-1574),** as does
+  `forManagedClient(id).createPortalSession({ return_url })`. It calls
+  `POST /api/v1/clients/:client_id/portal_sessions` and answers
+  `{ client_id, url, expires_at, return_url }`: a single-use link that
+  expires 60 seconds after it is minted, so mint it when the user clicks and
+  redirect their browser to it. `return_url` (optional, sent only when given)
+  must equal one of your organization's claim return URLs. Refused with 404
+  for a client that is not yours, and 422 (`client_not_managed`,
+  `client_being_removed`, `owner_email_missing`,
+  `return_url_not_registered`) for one that is not an unclaimed managed
+  client open to claims with an owner email. The answer is never replayed:
+  each call sends a new `Idempotency-Key`, and a reused one answers 409
+  `idempotency_replay_unavailable`, whose message now also says to create a
+  new portal session with a new key.
+- `ErrorCode` lists the API codes it was missing: `ALREADY_INVITED`,
+  `INVITE_ACCEPTED`, `INVITE_NOT_OPEN`, `INVITE_RATE_LIMITED`,
+  `NOT_AN_EMAIL_INVITE`, `CLIENT_BEING_REMOVED`, `CLIENT_NOT_REMOVABLE`,
+  `RETURN_URL_NOT_REGISTERED` and `OWNER_EMAIL_MISSING`, with TypeScript
+  declarations.
+
+### Fixed
+
+- **A failed authorization no longer leaves an earlier caller in the
+  `RequestStore`.** `EndpointAuthorize.authorize` clears the source
+  environment and organization ids before it asks, so a refused or failed
+  authorization in a context that already held a caller cannot name it.
+  `reportInteraction` already starts each request in a fresh
+  `AsyncLocalStorage` context; that is now pinned by a test.
+
 ## 0.14.1
 
 ### Security

@@ -29,6 +29,9 @@ const { ExceptionWriter } = require('../writers/exception-writer');
  * @param {import('express').NextFunction} next
  */
 function reportInteraction(req, res, next) {
+  // `run` starts a fresh context, never the one in force: a request that
+  // arrives inside an earlier one's async chain starts with no caller, no
+  // deprecation and a new uuid, so it cannot name the previous caller.
   RequestStore.run(req, () => {
     RequestWriter.write(req).catch(err => {
       console.error('[EndPointBlank] RequestWriter error:', err.message);

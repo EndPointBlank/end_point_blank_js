@@ -41,8 +41,8 @@ const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  *   it is never retried after it may have reached the server.
  *
  * 409 `idempotency_replay_unavailable` is never retried: the first POST
- * succeeded but its answer held a secret shown once, so asking again cannot
- * return it.
+ * succeeded but its answer held a secret shown once (a credential's secret, a
+ * portal session's link), so asking again cannot return it.
  */
 class Transport {
   #apiKey;
@@ -221,7 +221,8 @@ function errorFromAnswer(status, parsed, text, response, context) {
       message +=
         ' The first request with this Idempotency-Key succeeded, but its answer held a ' +
         'secret that is shown only once, so this SDK did not retry it. Read or list the ' +
-        `resource to see its current state${fields.location ? ` (${fields.location})` : ''}.`;
+        `resource to see its current state${fields.location ? ` (${fields.location})` : ''}; ` +
+        'for a portal session, create a new one with a new key.';
     }
     return new ManagementApiError({
       code: error.code,

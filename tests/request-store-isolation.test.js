@@ -22,6 +22,7 @@ describe('RequestStore isolation', () => {
       const request = (id, delayMs) =>
         RequestStore.run({ id }, async () => {
           RequestStore.setSourceApplicationEnvironmentId(`env-${id}`);
+          RequestStore.setSourceOrganizationId(`org-${id}`);
           RequestStore.setDeprecation({ deprecated_at: `${id}-at` });
 
           // Yield, letting the other request run and write its own values.
@@ -30,6 +31,7 @@ describe('RequestStore isolation', () => {
           observed.push({
             id,
             env: RequestStore.getSourceApplicationEnvironmentId(),
+            organization: RequestStore.getSourceOrganizationId(),
             deprecation: RequestStore.getDeprecation()?.deprecated_at,
           });
         });
@@ -38,8 +40,8 @@ describe('RequestStore isolation', () => {
       // visibly wrong rather than accidentally right through ordering.
       await Promise.all([request('one', 30), request('two', 5)]);
 
-      expect(observed).toContainEqual({ id: 'one', env: 'env-one', deprecation: 'one-at' });
-      expect(observed).toContainEqual({ id: 'two', env: 'env-two', deprecation: 'two-at' });
+      expect(observed).toContainEqual({ id: 'one', env: 'env-one', organization: 'org-one', deprecation: 'one-at' });
+      expect(observed).toContainEqual({ id: 'two', env: 'env-two', organization: 'org-two', deprecation: 'two-at' });
     });
 
     test('many requests at once each keep their own', async () => {
@@ -63,16 +65,19 @@ describe('RequestStore isolation', () => {
     test('a later request sees nothing from an earlier one', async () => {
       await RequestStore.run({}, async () => {
         RequestStore.setSourceApplicationEnvironmentId('env-first');
+        RequestStore.setSourceOrganizationId('org-first');
         RequestStore.setDeprecation({ deprecated_at: '2026-01-01T00:00:00Z' });
       });
 
       // No cleanup in between — isolation must not depend on it.
       const seen = await RequestStore.run({}, async () => ({
         env: RequestStore.getSourceApplicationEnvironmentId(),
+        organization: RequestStore.getSourceOrganizationId(),
         deprecation: RequestStore.getDeprecation(),
       }));
 
       expect(seen.env).toBeNull();
+      expect(seen.organization).toBeNull();
       expect(seen.deprecation).toBeNull();
     });
 
@@ -104,9 +109,11 @@ describe('RequestStore isolation', () => {
     test('setting outside a request is a no-op rather than an error', () => {
       expect(() => RequestStore.setDeprecation({ deprecated_at: 'x' })).not.toThrow();
       expect(() => RequestStore.setSourceApplicationEnvironmentId('x')).not.toThrow();
+      expect(() => RequestStore.setSourceOrganizationId('x')).not.toThrow();
 
       expect(RequestStore.getDeprecation()).toBeNull();
       expect(RequestStore.getSourceApplicationEnvironmentId()).toBeNull();
+      expect(RequestStore.getSourceOrganizationId()).toBeNull();
     });
   });
 });

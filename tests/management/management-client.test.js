@@ -266,10 +266,14 @@ describe('every resource method', () => {
     ['clients.list', (m) => m.clients.list(), 'GET', '/clients'],
     ['clients.create', (m) => m.clients.create({ name: 'Acme', contacts: [{ email: 'a@acme.test', first_name: 'A', last_name: 'B' }], packages: [{ api_package_id: 'p1', environment_id: 'e1' }], grants: [{ target_application_id: 'a1', environment_id: 'e1' }] }), 'POST', '/clients', { name: 'Acme', contacts: [{ email: 'a@acme.test', first_name: 'A', last_name: 'B' }], packages: [{ api_package_id: 'p1', environment_id: 'e1' }], grants: [{ target_application_id: 'a1', environment_id: 'e1' }] }],
     ['clients.create managed', (m) => m.clients.create({ name: 'Acme', managed: true }), 'POST', '/clients', { name: 'Acme', managed: true }],
+    ['clients.create managed with owner_email', (m) => m.clients.create({ name: 'Acme', managed: true, owner_email: 'owner@acme.test' }), 'POST', '/clients', { name: 'Acme', managed: true, owner_email: 'owner@acme.test' }],
     ['clients.get', (m) => m.clients.get('c1'), 'GET', '/clients/c1'],
+    ['clients.update', (m) => m.clients.update('c1', { owner_email: 'new-owner@acme.test' }), 'PATCH', '/clients/c1', { owner_email: 'new-owner@acme.test' }],
     ['clients.delete', (m) => m.clients.delete('c1'), 'DELETE', '/clients/c1'],
     ['clients.claimInvite', (m) => m.clients.claimInvite('c1', { email: 'owner@acme.test' }), 'POST', '/clients/c1/claim_invites', { email: 'owner@acme.test' }],
     ['clients.claimInvite with return_to', (m) => m.clients.claimInvite('c1', { email: 'owner@acme.test', return_to: 'https://app.acme.test/welcome' }), 'POST', '/clients/c1/claim_invites', { email: 'owner@acme.test', return_to: 'https://app.acme.test/welcome' }],
+    ['clients.createPortalSession', (m) => m.clients.createPortalSession('c1'), 'POST', '/clients/c1/portal_sessions'],
+    ['clients.createPortalSession with return_url', (m) => m.clients.createPortalSession('c1', { return_url: 'https://app.acme.test/done' }), 'POST', '/clients/c1/portal_sessions', { return_url: 'https://app.acme.test/done' }],
     ['clients.packages.list', (m) => m.clients.packages.list('c1'), 'GET', '/clients/c1/packages'],
     ['clients.packages.assign', (m) => m.clients.packages.assign('c1', { api_package_id: 'p1', environment_id: 'e1' }), 'POST', '/clients/c1/packages', { api_package_id: 'p1', environment_id: 'e1' }],
     ['clients.packages.update', (m) => m.clients.packages.update('c1', 'as1', { environment_id: 'e2' }), 'PATCH', '/clients/c1/packages/as1', { environment_id: 'e2' }],
@@ -449,6 +453,8 @@ describe('managed clients', () => {
     ['credentials.revoke', (s) => s.credentials.revoke('cr1'), 'DELETE', '/credentials/cr1', undefined],
     ['claimInvite', (s) => s.claimInvite({ email: 'o@acme.test' }), 'POST', '/claim_invites', { email: 'o@acme.test' }],
     ['claimInvite with return_to', (s) => s.claimInvite({ email: 'o@acme.test', return_to: 'https://app.acme.test/welcome' }), 'POST', '/claim_invites', { email: 'o@acme.test', return_to: 'https://app.acme.test/welcome' }],
+    ['createPortalSession', (s) => s.createPortalSession(), 'POST', '/portal_sessions', undefined],
+    ['createPortalSession with return_url', (s) => s.createPortalSession({ return_url: 'https://app.acme.test/done' }), 'POST', '/portal_sessions', { return_url: 'https://app.acme.test/done' }],
   ];
 
   test.each(cases)('forManagedClient(id).%s is scoped under /clients/:client_id', async (_label, call, method, path, body) => {
@@ -494,6 +500,119 @@ describe('claim invite return_to (sc-1515)', () => {
     expect(fetch.calls[0].body).not.toHaveProperty('return_to');
     expect(fetch.calls[1].body).toStrictEqual({ email: 'o@acme.test' });
     expect(fetch.calls[1].body).not.toHaveProperty('return_to');
+  });
+});
+
+describe('managed client owner_email (sc-1567)', () => {
+  test('update sends owner_email as a PATCH with no Idempotency-Key', async () => {
+    const fetch = fakeFetch(ok({ id: 'c3', managed: true }));
+    const { mgmt } = client(fetch);
+
+    await expect(mgmt.clients.update('c3', { owner_email: 'new-owner@acme.test' }))
+      .resolves.toEqual({ id: 'c3', managed: true });
+
+    const sent = fetch.calls[0];
+    expect(sent.method).toBe('PATCH');
+    expect(sent.path).toBe('/api/v1/clients/c3');
+    expect(sent.body).toStrictEqual({ owner_email: 'new-owner@acme.test' });
+    expect(sent.headers['Idempotency-Key']).toBeUndefined();
+  });
+
+  test('update is never retried after a 5xx or a lost connection', async () => {
+    for (const failure of [apiError(503, 'audit_unavailable'), new TypeError('fetch failed')]) {
+      const fetch = fakeFetch(failure, ok({ id: 'c3' }));
+      const { mgmt, sleep } = client(fetch);
+      await caught(mgmt.clients.update('c3', { owner_email: 'o@acme.test' }));
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+    }
+  });
+});
+
+describe('portal sessions (sc-1574)', () => {
+  const session = {
+    client_id: 'c1',
+    url: 'https://portal.test/managed/sessions/abc',
+    expires_at: '2026-10-07T12:01:00Z',
+    return_url: null,
+  };
+
+  test('answers the API data and sends no body without a return_url', async () => {
+    const fetch = fakeFetch(created(session));
+    const { mgmt } = client(fetch);
+
+    await expect(mgmt.clients.createPortalSession('c1')).resolves.toEqual(session);
+
+    const sent = fetch.calls[0];
+    expect(sent.method).toBe('POST');
+    expect(sent.path).toBe('/api/v1/clients/c1/portal_sessions');
+    expect(sent.body).toBeUndefined();
+    expect(sent.headers['Content-Type']).toBeUndefined();
+    expect(sent.headers['Idempotency-Key']).toMatch(UUID_V4);
+  });
+
+  test('sends return_url byte for byte when given', async () => {
+    const returnUrl = 'https://provider.test/portal/credential/claimed?x=1';
+    const fetch = fakeFetch(created({ ...session, return_url: returnUrl }));
+    const { mgmt } = client(fetch);
+
+    await expect(mgmt.forManagedClient('c1').createPortalSession({ return_url: returnUrl }))
+      .resolves.toEqual({ ...session, return_url: returnUrl });
+
+    expect(fetch.calls[0].path).toBe('/api/v1/clients/c1/portal_sessions');
+    expect(fetch.calls[0].body).toStrictEqual({ return_url: returnUrl });
+  });
+
+  test('sends no body for a null or undefined return_url', async () => {
+    const fetch = fakeFetch(created(session), created(session));
+    const { mgmt } = client(fetch);
+
+    await mgmt.clients.createPortalSession('c1', { return_url: null });
+    await mgmt.forManagedClient('c1').createPortalSession({ return_url: undefined });
+
+    expect(fetch.calls[0].body).toBeUndefined();
+    expect(fetch.calls[1].body).toBeUndefined();
+  });
+
+  // The answer is never replayed, so every click needs a key of its own.
+  test('sends a new Idempotency-Key on every call', async () => {
+    const fetch = fakeFetch(created(session), created(session));
+    const { mgmt } = client(fetch);
+
+    await mgmt.clients.createPortalSession('c1');
+    await mgmt.clients.createPortalSession('c1');
+
+    const [first, second] = fetch.calls.map((c) => c.headers['Idempotency-Key']);
+    expect(first).toMatch(UUID_V4);
+    expect(second).toMatch(UUID_V4);
+    expect(first).not.toBe(second);
+  });
+
+  test('answers the refusal', async () => {
+    const fetch = fakeFetch(apiError(422, 'client_not_managed'));
+    const { mgmt } = client(fetch);
+
+    const error = await caught(mgmt.clients.createPortalSession('c1'));
+
+    expect(error).toBeInstanceOf(ManagementApiError);
+    expect(error.status).toBe(422);
+    expect(error.code).toBe(ErrorCode.CLIENT_NOT_MANAGED);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test('says to create a new session when a key is reused', async () => {
+    const fetch = fakeFetch(apiError(409, 'idempotency_replay_unavailable', 'server text'));
+    const { mgmt, sleep } = client(fetch);
+
+    const error = await caught(mgmt.clients.createPortalSession('c1', {}, { idempotencyKey: 'k1' }));
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(error.status).toBe(409);
+    expect(error.code).toBe(ErrorCode.IDEMPOTENCY_REPLAY_UNAVAILABLE);
+    expect(error.idempotencyKey).toBe('k1');
+    expect(error.message).toMatch(/did not retry it/);
+    expect(error.message).toMatch(/portal session, create a new one with a new key/);
   });
 });
 
@@ -683,6 +802,7 @@ describe('idempotency keys', () => {
     expect(error.location).toBe('/api/v1/credentials/cr1');
     expect(error.idempotencyKey).toBe('k1');
     expect(error.message).toMatch(/Read or list the resource.*\/api\/v1\/credentials\/cr1/);
+    expect(error.message).toMatch(/for a portal session, create a new one with a new key\.$/);
   });
 });
 
@@ -816,6 +936,33 @@ describe('errors', () => {
     expect(fetch.mock.calls[0][1].redirect).toBe('manual');
     expect(error).toMatchObject({ code: ErrorCode.HTTP_ERROR, status: 302, location: 'https://elsewhere.test/' });
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test('ErrorCode lists exactly the codes the API answers, plus the SDK\'s own', () => {
+    // The same list as the Elixir SDK's Error.known_codes/0 (sc-1574).
+    expect(Object.values(ErrorCode).sort()).toEqual([
+      'missing_key', 'invalid_key', 'runtime_credential_refused', 'insufficient_scope',
+      'audit_unavailable', 'rate_limited', 'plan_limit', 'validation_failed', 'not_found',
+      'invalid_pagination', 'invalid_filter', 'invalid_idempotency_key', 'idempotency_key_reused',
+      'idempotency_request_in_progress', 'idempotency_replay_unavailable', 'bad_request',
+      'internal_server_error', 'has_dependents', 'protected', 'invalid_environment_base_urls',
+      'api_package_assigned', 'intake_sync_failed', 'delete_refused', 'intake_credential',
+      'intake_rejected', 'intake_unavailable', 'invalid_contacts', 'invalid_packages',
+      'invalid_grants', 'invalid_managed', 'client_not_accepted', 'client_accepted',
+      'client_not_managed', 'already_a_member', 'already_invited', 'invite_accepted',
+      'invite_not_open', 'invite_rate_limited', 'not_an_email_invite', 'client_being_removed',
+      'client_not_removable', 'managed_client_has_credentials', 'api_package_not_found',
+      'environment_not_found', 'already_assigned', 'nothing_published_in_environment',
+      'application_not_found', 'endpoint_not_found', 'environment_not_in_application',
+      'already_granted', 'grant_revoked_concurrently', 'return_to_not_registered',
+      'return_url_not_registered', 'owner_email_missing',
+      // Reported by this SDK, never by the server.
+      'network_error', 'http_error', 'invalid_response',
+    ].sort());
+    // A portal session's refusals.
+    expect(ErrorCode.CLIENT_BEING_REMOVED).toBe('client_being_removed');
+    expect(ErrorCode.OWNER_EMAIL_MISSING).toBe('owner_email_missing');
+    expect(ErrorCode.RETURN_URL_NOT_REGISTERED).toBe('return_url_not_registered');
   });
 
   test('ErrorCode lists the documented codes', () => {

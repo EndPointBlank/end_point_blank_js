@@ -73,13 +73,21 @@ const SOURCE_ENV_ID = '22222222-2222-4222-8222-222222222222';
 // `{ authorized: true }` with no `data`, which is how this command reading only
 // `deprecation` -- and never the caller's source environment -- passed its own
 // suite (sc-473).
-const intakeGrant = ({ sourceEnvId = SOURCE_ENV_ID, deprecation } = {}) => ({
+//
+// Since sc-1571 intake adds `source_organization_id`, the calling
+// organization's EndPointBlank id. `sourceOrganizationId: ABSENT` answers as an
+// intake older than that, which does not send the key at all.
+const ABSENT = Symbol('absent');
+const SOURCE_ORGANIZATION_ID = '44444444-4444-4444-8444-444444444444';
+
+const intakeGrant = ({ sourceEnvId = SOURCE_ENV_ID, sourceOrganizationId = SOURCE_ORGANIZATION_ID, deprecation } = {}) => ({
   authorized: true,
   data: [
     {
       id: '11111111-1111-4111-8111-111111111111',
       source_application_environment_id: sourceEnvId,
       target_application_environment_id: '33333333-3333-4333-8333-333333333333',
+      ...(sourceOrganizationId === ABSENT ? {} : { source_organization_id: sourceOrganizationId }),
       inserted_at: '2026-09-10T00:00:00Z',
     },
   ],
@@ -99,16 +107,19 @@ describe('EndpointAuthorize.authorize', () => {
   // has been read, since the deprecation, the source environment and the uuid
   // only exist inside the request context -- RequestStore.getUuid() outside of
   // RequestStore.run() returns null, so they have to be captured here, before
-  // the promise settles.
-  const authorize = (request, path = '/students', version = '1') =>
+  // the promise settles. `before` runs inside the context first, to leave
+  // something there for the authorization to find.
+  const authorize = (request, path = '/students', version = '1', before = () => {}) =>
     new Promise((resolve, reject) => {
       RequestStore.run(request, async () => {
         try {
+          before();
           const response = await EndpointAuthorize.authorize(request, path, version);
           resolve({
             response,
             deprecation: RequestStore.getDeprecation(),
             sourceEnvId: RequestStore.getSourceApplicationEnvironmentId(),
+            sourceOrganizationId: RequestStore.getSourceOrganizationId(),
             uuid: RequestStore.getUuid(),
           });
         } catch (err) {
@@ -466,6 +477,96 @@ describe('EndpointAuthorize.authorize', () => {
       const { sourceEnvId } = await authorize(req());
 
       expect(sourceEnvId).toBeNull();
+    });
+  });
+
+  // sc-1571: intake names the calling organization by its EndPointBlank id.
+  describe('the calling organization', () => {
+    const leaveStale = () => {
+      RequestStore.setSourceApplicationEnvironmentId('env-stale');
+      RequestStore.setSourceOrganizationId('org-stale');
+    };
+
+    test('is recorded beside the source environment id', async () => {
+      api.authorizeQueue.push(jsonResponse(201, intakeGrant({ sourceOrganizationId: 'org-42' })));
+
+      const { sourceOrganizationId, sourceEnvId } = await authorize(req());
+
+      expect(sourceOrganizationId).toBe('org-42');
+      expect(sourceEnvId).toBe(SOURCE_ENV_ID);
+    });
+
+    test('is null, quietly, when intake is older than the field', async () => {
+      // An older intake is not a broken contract, so nothing is logged: the
+      // error log is kept for the env id, whose absence is one.
+      api.authorizeQueue.push(jsonResponse(201, intakeGrant({ sourceOrganizationId: ABSENT })));
+
+      const { response, sourceOrganizationId, sourceEnvId } = await authorize(req());
+
+      expect(response.status).toBe(201);
+      expect(sourceOrganizationId).toBeNull();
+      expect(sourceEnvId).toBe(SOURCE_ENV_ID);
+      expect(console.error.mock.calls.map(args => args.join(' ')).join('\n'))
+        .not.toMatch(/source_organization_id/);
+    });
+
+    test('is null when intake answers null for an organization with no id', async () => {
+      api.authorizeQueue.push(jsonResponse(201, intakeGrant({ sourceOrganizationId: null })));
+
+      const { sourceOrganizationId } = await authorize(req());
+
+      expect(sourceOrganizationId).toBeNull();
+    });
+
+    test('is not recorded when the authorize service does not answer', async () => {
+      // A value left by an earlier authorization in this context must not
+      // survive a failed one and name the wrong caller.
+      api.authorizeQueue.push(null);
+
+      const { sourceOrganizationId, sourceEnvId } = await authorize(req(), '/students', '1', leaveStale);
+
+      expect(sourceOrganizationId).toBeNull();
+      expect(sourceEnvId).toBeNull();
+    });
+
+    test('is not recorded for a refused request', async () => {
+      api.authorizeQueue.push(jsonResponse(403, { error: 'denied' }));
+
+      const { sourceOrganizationId, sourceEnvId } = await authorize(req(), '/students', '1', leaveStale);
+
+      expect(sourceOrganizationId).toBeNull();
+      expect(sourceEnvId).toBeNull();
+    });
+
+    test('a cache hit still records it', async () => {
+      // Cached per client and route like the deprecation, so an organization
+      // carried only on the miss would be there on roughly one request in N.
+      api.authorizeQueue.push(jsonResponse(201, intakeGrant({ sourceOrganizationId: 'org-cached' })));
+
+      await authorize(req());
+      const hit = await authorize(req());
+
+      expect(api.calls.authorize).toHaveLength(1);
+      expect(hit.sourceOrganizationId).toBe('org-cached');
+    });
+
+    test('an entry cached before the organization was still authorizes', async () => {
+      // 0.14.x cached `{sourceApplicationEnvironmentId, deprecation}`. Such an
+      // entry answers with its env id and deprecation, and no organization,
+      // rather than leaving whatever was there before.
+      authCache.store('epb_auth:Basic Y2xpZW50:/students:GET:billing:1', {
+        sourceApplicationEnvironmentId: 'env-0.14',
+        deprecation: DEPRECATION,
+      });
+
+      const { response, sourceEnvId, sourceOrganizationId, deprecation } =
+        await authorize(req(), '/students', '1', leaveStale);
+
+      expect(api.calls.authorize).toHaveLength(0);
+      expect(response.status).toBe(201);
+      expect(sourceEnvId).toBe('env-0.14');
+      expect(sourceOrganizationId).toBeNull();
+      expect(deprecation).toEqual(DEPRECATION);
     });
   });
 
