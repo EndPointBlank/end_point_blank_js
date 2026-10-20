@@ -527,8 +527,8 @@ epb.configure({
     { target: 'request_body', path: '$..ssn', replacement_value: '***' },
     // Keep first/last 4 of a card number in error messages via backreferences.
     { target: 'error_message', regex: '(\\d{4})-\\d{4}-\\d{4}-(\\d{4})', replacement_value: '$1-****-****-$2' },
-    // Redact a custom API-key header from reported requests.
-    { target: 'request_headers', path: "$['x-api-key']", replacement_value: '...' },
+    // Redact a custom identifying header from reported requests.
+    { target: 'request_headers', path: "$['x-customer-id']", replacement_value: '...' },
   ],
   // Optional: runs after all rules; last chance to transform the payload.
   maskHook: (payload, recordType) => payload,
@@ -557,9 +557,11 @@ actual outgoing wire payload — `request_body` targets the `request` key, `requ
 `path`. `LogWriter` log entries are not affected by masking rules (there is no `log` field
 mapping).
 
-**Credential and cookie headers are never sent.** Before any rule runs, `RequestWriter` drops
-`Authorization`, `Proxy-Authorization` and `Cookie` from the request record, and `ResponseWriter`
-drops `Set-Cookie` from the response record, whatever their letter case. They are left out of the
+**Credential and cookie headers are never sent.** Before any rule runs, `RequestWriter` and
+`ResponseWriter` drop these headers from their records, whatever their letter case:
+`Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `X-Api-Key`, `Api-Key`,
+`X-Auth-Token`, `X-Access-Token`, `X-Refresh-Token`, `X-Amz-Security-Token`, `X-Csrf-Token`,
+`X-Xsrf-Token`, `X-Goog-Api-Key` and `Ocp-Apim-Subscription-Key`. They are left out of the
 record, not masked: they are not in the payload the rules and hook receive. The list is
 `SENSITIVE_HEADERS` in `src/sensitive-headers.js`.
 
