@@ -527,8 +527,8 @@ epb.configure({
     { target: 'request_body', path: '$..ssn', replacement_value: '***' },
     // Keep first/last 4 of a card number in error messages via backreferences.
     { target: 'error_message', regex: '(\\d{4})-\\d{4}-\\d{4}-(\\d{4})', replacement_value: '$1-****-****-$2' },
-    // Redact a custom API-key header from reported requests.
-    { target: 'request_headers', path: "$['x-api-key']", replacement_value: '...' },
+    // Redact a custom identifying header from reported requests.
+    { target: 'request_headers', path: "$['x-customer-id']", replacement_value: '...' },
   ],
   // Optional: runs after all rules; last chance to transform the payload.
   maskHook: (payload, recordType) => payload,
